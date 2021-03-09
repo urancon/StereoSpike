@@ -6,11 +6,11 @@ In progress - March-August 2021.
 
 ## Overview
 
-**Spiking neural networks** (SNN) are getting more and more interest in the AI community, as they use temporal information, to the
+**Spiking neural networks (SNN)** are getting more and more interest in the AI community, as they use temporal information, to the
 contrary of their "regular" ANN cousins. They could even outperform the latter in the coming years and become a new paradigm for complex computation.
 Indeed, it is already broadly recognized that their hardware implementation on neuromorphic chips is far less energy consuming
 than classical GPUs. In this context, a growing number of innovators and constructors propose compatible hardware, especially
-in the field of vision. **Dynamic Vision Sensors** capture the dynamics of a scene and moving objects with inspiration from 
+in the field of vision. **Dynamic Vision Sensors (DVS)** capture the dynamics of a scene and moving objects with inspiration from 
 the retina. Instead of taking shots at regular intervals, it rather produces spikes in extremely high temporal resolution
 (in the order of the microsecond), whenever a detected luminance change in a given location of the field exceeds a threshold.
 They are now being investigated for countless applications and at different levels, such as object detection, embedded systems
