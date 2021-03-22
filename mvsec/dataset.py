@@ -1,8 +1,5 @@
 import h5py
-import cv2
 import numpy as np
-import gc
-from tqdm import tqdm
 
 from torch.utils.data.dataset import Dataset
 
@@ -13,15 +10,22 @@ from mvsec_utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecFlo
 
 
 class MVSEC(EventsFramesDatasetBase):
+    """
+    Neuromorphic dataset class to hold MVSEC data.
+
+    We use Adress Event Representation (AER) format to represent events.
+    An MVSEC sequence (e.g. 'indoor_flying_4') is cut into frames on which we accumulate spikes occurring during a
+    certain time interval dt.
+
+    Essentially, the sequence is translated in 2 input tensors (left/right) of shape [# of frames, 2 (ON/OFF), W, H]
+    Corresponding round-truth depth maps are contained in a tensor of shape [# of frames, 2 (ON/OFF), W, H]
+    """
 
     @staticmethod
     def get_wh():
         return 346, 260
 
-    def __init__(self, root: str, use_frame=True, frames_num=10, split_by='number', normalization='max'):
-        # TODO: write some docstring about data format (shape of tensors, meaning of dimensions, etc.)
-        # TODO: remove unused arguments
-
+    def __init__(self, root: str, num_frames_per_depth_map=1, normalization='max'):
         self.normalization = normalization
 
         # load the data
@@ -37,10 +41,8 @@ class MVSEC(EventsFramesDatasetBase):
         Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])
 
         # get the events
-        Levents = data['davis']['left']['events']  # EVENTS: X Y TIME POLARITY
-        Levents = np.array(Levents)
-        Revents = data['davis']['right']['events']  # EVENTS: X Y TIME POLARITY
-        Revents = np.array(Revents)
+        Levents = np.array(data['davis']['left']['events'])  # EVENTS: X Y TIME POLARITY
+        Revents = np.array(data['davis']['right']['events'])  # EVENTS: X Y TIME POLARITY
 
         # rectify the spatial coordinates of spike events
         Lx_path = root + 'indoor_flying/indoor_flying_calib/indoor_flying_left_x_map.txt'
@@ -51,64 +53,49 @@ class MVSEC(EventsFramesDatasetBase):
         rect_Levents = np.array(mvsecRectifyEvents(Levents, Lx_map, Ly_map))
         rect_Revents = np.array(mvsecRectifyEvents(Revents, Rx_map, Ry_map))
 
-        # convert the timestamps from float to integer (needed for compatibility with spikingjelly)
-        rect_Levents = mvsecFloatToInt(rect_Levents)
-        rect_Revents = mvsecFloatToInt(rect_Revents)
+        # convert data to a sequence of frames
+        xL, yL = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts,
+                                               num_frames_per_depth_map=num_frames_per_depth_map)
+        xR, _ = mvsecCumulateSpikesIntoFrames(rect_Revents, Rdepths_rect, Rdepths_rect_ts,
+                                               num_frames_per_depth_map=num_frames_per_depth_map)
 
-        # save the data to Address Event Representation (AER) over the whole sequence
-        #frames_num = len(Ldepths_rect_ts)
-        """
-        self.data = {'left':
-                         {'t': rect_Levents[:, 2], 'x': rect_Levents[:, 0], 'y': rect_Levents[:, 1],
-                          'p': rect_Levents[:, 3]},
-                     'right':
-                         {'t': rect_Revents[:, 2], 'x': rect_Revents[:, 0], 'y': rect_Revents[:, 1],
-                          'p': rect_Revents[:, 3]},
-                     }
-        self.labels = {'left':
-                           {'t': Ldepths_rect_ts, 'maps': Ldepths_rect},
-                       'right':
-                           {'t': Rdepths_rect_ts, 'maps': Rdepths_rect}
-                       }
-        """
+        assert xL.shape == xR.shape
 
-        xL, yL = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts, num_frames_per_depth_map=2)
-        xR, yR = mvsecCumulateSpikesIntoFrames(rect_Revents, Rdepths_rect, Rdepths_rect_ts, num_frames_per_depth_map=2)
+        if self.normalization is not None and self.normalization != 'frequency':
+            self.data_left = normalize_frame(xL, self.normalization)
+            self.data_right = normalize_frame(xR, self.normalization)
+        else:
+            self.data_left = xL
+            self.data_right = xR
 
-        # close hf5py file as it is no longer useful
+        self.labels = yL  # only use left depth map as ground-truth
+
+        # close hf5py file properly
         data.close()
-
-        del Levents
-        del Revents
-        del rect_Levents
-        del rect_Revents
-
-        gc.collect()
-
-        self.data = np.stack((xL, xR))  # too memory consuming for num_frames_per_depth_map > 5 !!!! # data[0] contains 'left' data, data[1] contains 'right' data
-        self.labels = np.stack((yL, yR))  # shape [2 (left/right), # of frames, H, W]
 
     def __len__(self):
         """
         :return: the number of frames into which we split the dataset
         """
-        return self.data.shape[0]
+        return self.data_left.shape[0]
 
     def __getitem__(self, index):
-        frame = self.data[:, index] # TODO: currently not grabbing the right thing
-        label = self.labels[:, index]
-
-        # TODO: normalize grabbed frame (use spikingjelly's code)
-        #if self.normalization is not None and self.normalization != 'frequency':
-        #    frame = normalize_frame(frame, self.normalization)
-
-        return frame, label
+        """
+        :param index:
+        :return: the left and right spike frames and their associated ground-truth for the input index. Consequently,
+                 frame_left and frame_right have shape [2 (polarity), W, H] and label has shape [H, W]
+        """
+        frame_left = self.data_left[index]
+        frame_right = self.data_right[index]
+        label = self.labels[index]
+        return [frame_left, frame_right], label
 
 
 if __name__ == "__main__":
     print(MVSEC.get_wh())
-    dataset = MVSEC('/home/ulysse/Desktop/PFE CerCo/datasets/MVSEC/')
+    dataset = MVSEC('/home/ulysse/Desktop/PFE CerCo/datasets/MVSEC/', num_frames_per_depth_map=5, normalization='max')
     print(len(dataset))
     x, y = dataset[0]
-    print(x.shape)
+    print(x[0].shape)
     print(y.shape)
+

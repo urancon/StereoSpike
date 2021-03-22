@@ -20,7 +20,7 @@ def mvsecLoadRectificationMaps(Lx_path, Ly_path, Rx_path, Ry_path):
     :param Ry_path:                     ..                              y        ..          right
     :return: all corresponding mapping matrices in the form of a numpy array
     """
-    print("loading rectification maps...\n")
+    print("\nloading rectification maps...")
     Lx_map = np.loadtxt(Lx_path)
     Ly_map = np.loadtxt(Ly_path)
     Rx_map = np.loadtxt(Rx_path)
@@ -38,7 +38,7 @@ def mvsecRectifyEvents(events, x_map, y_map):
     :param y_map:                       ..
     :return: rectified events, in the same format as the input events
     """
-    print("rectifying spike coordinates...\n")
+    print("\nrectifying spike coordinates...")
     rect_events = []
     for event in tqdm(events):
         x = int(event[0])
@@ -182,7 +182,7 @@ def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
     :param Lblended:
     :return:
     """
-    print("cumulating spikes and editing depth maps...\n")
+    print("\ncumulating spikes and editing depth maps...")
     # general variable related to the video
     currentFrame = 0
     frames = []
@@ -257,15 +257,13 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
     Note: By default, spikes are accumulated over frames of duration dt = 1/FPS = 50 ms. In fact,
         dt = 1 / (FPS * num_frames_per_depth_map)
         Equivalence Table :
-        ---------------------------------------
-          dt     |     num_frames_per_depth_map |
-        ---------------------------------------
-          50 ms  |     1
-          10 ms  |     5
-          5 ms   |     10
-          1 ms   |     25
-
-    TODO: gerer la premiere depth map comme les autres
+        ---------------------------------------------
+          dt (ms)    |     num_frames_per_depth_map |
+        ---------------------------------------------
+          50         |         1
+          10         |         5
+          5          |         10
+          1          |         25
 
     :param events: events with their timestamps being floats (not converted to integer yet)
     :param depth_rect_ts: depth maps
@@ -275,6 +273,9 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
     """
     assert num_frames_per_depth_map in [1, 2, 5, 10, 25], "num_frames_per_depth_map must divide 50 ! Choose another " \
                                                           "value among [1, 2, 5, 10, 25] ..."
+    print("\nCumulating spikes into frames and synchronizing with ground-truth...")
+    print("Time interval of each frame: dt = " + str(50/num_frames_per_depth_map) + " ms")
+
     fps = num_frames_per_depth_map * FPS
     currentFrame = 0
     currentMap = 0
@@ -290,12 +291,16 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
     listTime[:] -= first_spike_time  # set the first event to time t0=0s
     depth_rect_ts[:] -= first_spike_time  # the first spike happens before the first lidar acquisition
 
-    frame = np.zeros((2, 260, 346), dtype='int')
+    while depth_rect_ts[0] >= 0:  # create dummy timestamps and labels before the first timestamp
+        depth_rect_ts = np.insert(depth_rect_ts, 0, depth_rect_ts[0] - (1 / fps))
+        depth_rect = np.insert(depth_rect, 0, depth_rect[0], axis=0)
+
+    frame = np.zeros((2, 260, 346), dtype='float')
     for i in tqdm(range(len(events))):  # loop over spike events
 
         # if the time of event i does not exceed the timestamp of the next lidar acquisition
-        # (the first spike event comes 0.2605787s before the first lidar acquisition for this sequence)
-        if listTime[i] < 0.2605787 + currentFrame * 1 / fps:
+        # (the first spike event comes depth_rect_ts[0] before the first lidar acquisition for this sequence)
+        if listTime[i] < depth_rect_ts[0] + currentFrame * 1 / fps:
 
             # register it and mark it on the current frame
             if listIndX[i] < 346 and listIndY[i] < 260:
@@ -310,7 +315,7 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
             maps.append(depth_rect[currentMap])
             currentMap = 1 + currentFrame // num_frames_per_depth_map  # remember that the first depth map has only 1 frame corresponding to it
             currentFrame += 1
-            frame = np.zeros((2, 260, 346), dtype='int')
+            frame = np.zeros((2, 260, 346), dtype='float')
 
             if listIndX[i] < 346 and listIndY[i] < 260:
                 if listPol[i] == 1:
@@ -370,3 +375,4 @@ if __name__ == '__main__':
     #mvsecShowDepth(Ldepths_rect, Rdepths_rect, Ldepths_raw, Rdepths_raw, Rblended, Lblended)
     #mvsecToVideo(datafile, events, images)
     #mvsecReadEvents(events)
+
