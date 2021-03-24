@@ -1,12 +1,11 @@
 import h5py
 import numpy as np
-
+import torch
 from torch.utils.data.dataset import Dataset
-
 import spikingjelly
 from spikingjelly.datasets.utils import EventsFramesDatasetBase, integrate_events_to_frames, normalize_frame
 
-from mvsec_utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecFloatToInt, mvsecCumulateSpikesIntoFrames
+from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames
 
 
 class MVSEC(EventsFramesDatasetBase):
