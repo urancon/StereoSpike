@@ -56,6 +56,27 @@ def mvsecRectifyEvents(events, x_map, y_map):
     return rect_events
 
 
+def mvsecApplyLogToDepths(depths_rect_lin, Dmax=255, alpha=12.4):
+    """
+    Applies normalized logarithm to the input depth maps. Log depth maps can represent large variations in a compact
+    range, hence facilitating learning.
+    Refer to the paper 'Learning Monocular Depth from Events' (3DV 2020) for more details.
+
+    Basically,
+
+    (Dlin + 1) = Dmax * exp(-alpha * (1-Dlog))
+
+    We add +1 to linear depths so that we can take the log of groundtruth depths of 0.
+
+    :param depths_rect_lin:  a tensor of shape [# of depth maps, W, H] containing depth maps at original linear scale
+    :param Dmax: maximum expected depth
+    :param alpha: parameter such that depth value of 0 maps to minimum observed depth. The bigger the alpha, the better
+    the depth resolution.
+    :return:  a tensor of shape [# of depth maps, W, H], but containing normalized log values instead
+    """
+    return 1 - 1/alpha * (np.log(Dmax) - np.log(depths_rect_lin + 1))
+
+
 def mvsecFloatToInt(events):
     """
     Converts an event array elements from floats to integers;

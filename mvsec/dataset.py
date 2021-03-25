@@ -5,7 +5,7 @@ from torch.utils.data.dataset import Dataset
 import spikingjelly
 from spikingjelly.datasets.utils import EventsFramesDatasetBase, integrate_events_to_frames, normalize_frame
 
-from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames
+from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames, mvsecApplyLogToDepths
 
 
 class MVSEC(EventsFramesDatasetBase):
@@ -36,6 +36,10 @@ class MVSEC(EventsFramesDatasetBase):
         # get the ground-truth depth maps (i.e. our labels) and their timestamps
         Ldepths_rect = np.array(data_gt['davis']['left']['depth_image_rect'])  # RECTIFIED / LEFT
         Rdepths_rect = np.array(data_gt['davis']['right']['depth_image_rect'])  # RECTIFIED / RIGHT
+        Ldepths_rect = np.nan_to_num(Ldepths_rect, nan=255.)  # replace nan values with 255.
+        Rdepths_rect = np.nan_to_num(Rdepths_rect, nan=255.)
+        Ldepths_rect = mvsecApplyLogToDepths(Ldepths_rect)  # convert linear to normalized log depths
+        Rdepths_rect = mvsecApplyLogToDepths(Rdepths_rect)
         Ldepths_rect_ts = np.array(data_gt['davis']['left']['depth_image_rect_ts'])
         Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])
 
@@ -97,4 +101,3 @@ if __name__ == "__main__":
     x, y = dataset[0]
     print(x[0].shape)
     print(y.shape)
-
