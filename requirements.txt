@@ -1,0 +1,10 @@
+# minimal requirements
+torch
+cv2
+h5py
+tqdm
+
+
+# required by spikingjelly, but not necessary to us
+loris
+torchaudio
