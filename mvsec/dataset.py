@@ -5,7 +5,16 @@ from torch.utils.data.dataset import Dataset
 import spikingjelly
 from spikingjelly.datasets.utils import EventsFramesDatasetBase, integrate_events_to_frames, normalize_frame
 
-from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames, mvsecApplyLogToDepths
+from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames, \
+    mvsecSpikesAndDepth, mvsecToVideo
+from network.metrics import lin_to_log_depths
+
+
+SEQUENCES_FRAMES = {'indoor_flying': {'indoor_flying_1': (140, 1200),
+                                      'indoor_flying_2': (160, 1580),
+                                      'indoor_flying_3': (125, 1815),
+                                      'indoor_flying_4': (90, 360)}
+                    }
 
 
 class MVSEC(EventsFramesDatasetBase):
@@ -24,37 +33,58 @@ class MVSEC(EventsFramesDatasetBase):
     def get_wh():
         return 346, 260
 
-    def __init__(self, root: str, num_frames_per_depth_map=1, normalization='max'):
+    def __init__(self, root: str, num_frames_per_depth_map=1, normalization='max', take_log=True, show_sequence=False):
+        self.root = root
         self.normalization = normalization
 
         # load the data
-        datafile = root + 'indoor_flying/indoor_flying4_data'
+        datafile = self.root + 'indoor_flying/indoor_flying4_data'
         data = h5py.File(datafile + '.hdf5', 'r')
-        datafile_gt = root + 'indoor_flying/indoor_flying4_gt'
+        datafile_gt = self.root + 'indoor_flying/indoor_flying4_gt'
         data_gt = h5py.File(datafile_gt + '.hdf5', 'r')
 
         # get the ground-truth depth maps (i.e. our labels) and their timestamps
         Ldepths_rect = np.array(data_gt['davis']['left']['depth_image_rect'])  # RECTIFIED / LEFT
         Rdepths_rect = np.array(data_gt['davis']['right']['depth_image_rect'])  # RECTIFIED / RIGHT
-        Ldepths_rect = np.nan_to_num(Ldepths_rect, nan=255.)  # replace nan values with 255.
-        Rdepths_rect = np.nan_to_num(Rdepths_rect, nan=255.)
-        Ldepths_rect = mvsecApplyLogToDepths(Ldepths_rect)  # convert linear to normalized log depths
-        Rdepths_rect = mvsecApplyLogToDepths(Rdepths_rect)
         Ldepths_rect_ts = np.array(data_gt['davis']['left']['depth_image_rect_ts'])
-        Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])
+        Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])  # TODO: Right depth map might be unnecessary !!!
+
+        # convert linear (metric) to normalized log depths if required
+        if take_log:
+            Ldepths_rect = lin_to_log_depths(Ldepths_rect)
+            Rdepths_rect = lin_to_log_depths(Rdepths_rect)
+
+        # remove depth maps occurring during take-off and landing of the drone (bad data)
+        start_idx, end_idx = SEQUENCES_FRAMES['indoor_flying']['indoor_flying_4']
+        Ldepths_rect = Ldepths_rect[start_idx:end_idx, :, :]
+        Rdepths_rect = Rdepths_rect[start_idx:end_idx, :, :]
+        Ldepths_rect_ts = Ldepths_rect_ts[start_idx:end_idx]
+        Rdepths_rect_ts = Rdepths_rect_ts[start_idx:end_idx]
+
+        # replace nan values with 255.
+        Ldepths_rect = np.nan_to_num(Ldepths_rect, nan=0)
+        Rdepths_rect = np.nan_to_num(Rdepths_rect, nan=0)
 
         # get the events
         Levents = np.array(data['davis']['left']['events'])  # EVENTS: X Y TIME POLARITY
         Revents = np.array(data['davis']['right']['events'])  # EVENTS: X Y TIME POLARITY
 
-        # rectify the spatial coordinates of spike events
-        Lx_path = root + 'indoor_flying/indoor_flying_calib/indoor_flying_left_x_map.txt'
-        Ly_path = root + 'indoor_flying/indoor_flying_calib/indoor_flying_left_y_map.txt'
-        Rx_path = root + 'indoor_flying/indoor_flying_calib/indoor_flying_right_x_map.txt'
-        Ry_path = root + 'indoor_flying/indoor_flying_calib/indoor_flying_right_y_map.txt'
+        # remove events occurring during take-off and landing of the drone as well
+        Levents = Levents[(Levents[:, 2] > Ldepths_rect_ts[0] - 0.05) & (Levents[:, 2] < Ldepths_rect_ts[-1])]
+        Revents = Revents[(Revents[:, 2] > Ldepths_rect_ts[0] - 0.05) & (Revents[:, 2] < Ldepths_rect_ts[-1])]
+
+        # rectify the spatial coordinates of spike events and get rid of events falling outside of the 346x260 fov
+        Lx_path = self.root + 'indoor_flying/indoor_flying_calib/indoor_flying_left_x_map.txt'
+        Ly_path = self.root + 'indoor_flying/indoor_flying_calib/indoor_flying_left_y_map.txt'
+        Rx_path = self.root + 'indoor_flying/indoor_flying_calib/indoor_flying_right_x_map.txt'
+        Ry_path = self.root + 'indoor_flying/indoor_flying_calib/indoor_flying_right_y_map.txt'
         Lx_map, Ly_map, Rx_map, Ry_map = mvsecLoadRectificationMaps(Lx_path, Ly_path, Rx_path, Ry_path)
         rect_Levents = np.array(mvsecRectifyEvents(Levents, Lx_map, Ly_map))
         rect_Revents = np.array(mvsecRectifyEvents(Revents, Rx_map, Ry_map))
+
+        # show the sequence
+        if show_sequence:
+            mvsecSpikesAndDepth(Ldepths_rect, rect_Levents)
 
         # convert data to a sequence of frames
         xL, yL = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts,

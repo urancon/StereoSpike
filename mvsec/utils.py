@@ -3,11 +3,11 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-
 FRAME_SIZE = (346, 260)
 FRAME_W = 346
 FRAME_H = 260
-FPS = 20
+LIDAR_FPS = 20
+DAVIS_FPS = 50
 
 
 def mvsecLoadRectificationMaps(Lx_path, Ly_path, Rx_path, Ry_path):
@@ -56,27 +56,6 @@ def mvsecRectifyEvents(events, x_map, y_map):
     return rect_events
 
 
-def mvsecApplyLogToDepths(depths_rect_lin, Dmax=255, alpha=12.4):
-    """
-    Applies normalized logarithm to the input depth maps. Log depth maps can represent large variations in a compact
-    range, hence facilitating learning.
-    Refer to the paper 'Learning Monocular Depth from Events' (3DV 2020) for more details.
-
-    Basically,
-
-    (Dlin + 1) = Dmax * exp(-alpha * (1-Dlog))
-
-    We add +1 to linear depths so that we can take the log of groundtruth depths of 0.
-
-    :param depths_rect_lin:  a tensor of shape [# of depth maps, W, H] containing depth maps at original linear scale
-    :param Dmax: maximum expected depth
-    :param alpha: parameter such that depth value of 0 maps to minimum observed depth. The bigger the alpha, the better
-    the depth resolution.
-    :return:  a tensor of shape [# of depth maps, W, H], but containing normalized log values instead
-    """
-    return 1 - 1/alpha * (np.log(Dmax) - np.log(depths_rect_lin + 1))
-
-
 def mvsecFloatToInt(events):
     """
     Converts an event array elements from floats to integers;
@@ -94,48 +73,6 @@ def mvsecFloatToInt(events):
     return events
 
 
-def mvsecReadEvents(events):
-    """
-    Creates a .mp4 video with all cumulated spikes. Blue: OFF, Red: ON
-
-    :param events:
-    :return:
-    """
-    frameSize = (260, 346)
-    frame = np.ones(frameSize).astype(np.uint8) * 127
-    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-    mer = 361579  # mean event rate: events/s
-    FPS = 60
-    listIndX = [int(spk[0]) for spk in events]
-    listIndY = [int(spk[1]) for spk in events]
-    listTime = [spk[2] for spk in events]
-    listPol = [spk[3] for spk in events]
-    listTime[:] -= listTime[0]
-    frames = []
-    currentFrame = 0
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter('indoor_flying4_events.mp4', fourcc, FPS, FRAME_SIZE)
-    for i in tqdm(range(len(events))):
-        while listTime[i] > currentFrame * (1 / FPS):  # put all spikes that occurred (?)
-            frames.append(frame)
-            frame = np.ones(frameSize).astype(np.uint8) * 127
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-            currentFrame += 1
-        if listPol[i] == 1:  # ON / BLUE
-            frame[listIndY[i], listIndX[i], 0] = 0  # R
-            frame[listIndY[i], listIndX[i], 1] = 0  # G
-            frame[listIndY[i], listIndX[i], 2] = 255  # B
-        else:  # OFF / RED
-            frame[listIndY[i], listIndX[i], 0] = 255  # R
-            frame[listIndY[i], listIndX[i], 1] = 0  # G
-            frame[listIndY[i], listIndX[i], 2] = 0  # B
-    for f in frames:
-        # cv2.imshow('events', f)
-        out.write(f)
-        # cv2.waitKey(int(1000 / FPS))
-    out.release()
-
-
 def mvsecShowDepth(Ldepths_rect, Rdepths_rect, Ldepths_raw, Rdepths_raw, Rblended, Lblended):
     """
     Reconstitutes a video file from the Lidar depth acquisitions.
@@ -150,24 +87,26 @@ def mvsecShowDepth(Ldepths_rect, Rdepths_rect, Ldepths_raw, Rdepths_raw, Rblende
     :return:
     """
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter('depth.mp4', fourcc, FPS, (2*346, 3*260))
+    out = cv2.VideoWriter('depth.mp4', fourcc, LIDAR_FPS, (2 * 346, 3 * 260))
 
     for i in range(len(Ldepths_rect)):
-        f_rect = np.concatenate((Ldepths_rect[i], Rdepths_rect[i]), axis=1)  # concatenate left and right DMs to show them side by side
+        f_rect = np.concatenate((Ldepths_rect[i], Rdepths_rect[i]),
+                                axis=1)  # concatenate left and right DMs to show them side by side
         f_raw = np.concatenate((Ldepths_raw[i], Rdepths_raw[i]), axis=1)
         f_blended = np.concatenate((Lblended[i], Rblended[i]), axis=1)
 
-        f = np.concatenate((f_rect, f_raw), axis=0)  # concatenate to show rectified maps at the top and raw at the bottom
+        f = np.concatenate((f_rect, f_raw),
+                           axis=0)  # concatenate to show rectified maps at the top and raw at the bottom
 
         f = np.nan_to_num(f, copy=True, nan=0)  # small processing of the depth maps; DO NOT DO THIS FOR TRAINING A SNN
         f = cv2.normalize(f, None, 0, 255, cv2.NORM_MINMAX)
-        f = cv2.cvtColor(f,cv2.COLOR_GRAY2RGB)
+        f = cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
         f = np.concatenate((f, f_blended), axis=0)
         f = f.astype(np.uint8)
 
         cv2.imshow("depth maps: Left | Right ----- Rectified (top) | Raw (bottom)", f)
         out.write(f)
-        cv2.waitKey(int(1000 / FPS))
+        cv2.waitKey(int(1000 / LIDAR_FPS))
 
     out.release()
 
@@ -182,18 +121,18 @@ def mvsecShowBlended(Lblended, Rblended):
     :return:
     """
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter('blended.mp4', fourcc, FPS, (2*346, 260))
+    out = cv2.VideoWriter('blended.mp4', fourcc, LIDAR_FPS, (2 * 346, 260))
 
-    for i in range(len(Ldepths_rect)):
+    for i in range(len(Lblended)):
         f = np.concatenate((Lblended[i], Rblended[i]), axis=1)  # concatenate to show left and right images side by side
         cv2.imshow("depth maps / events superposition (provided by the authors) ----- Left | Right", f)
         out.write(f)
-        cv2.waitKey(int(1000 / FPS))
+        cv2.waitKey(int(1000 / LIDAR_FPS))
 
     out.release()
 
 
-def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
+def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended=None):
     """
     Reconsitutes a video file from Lidar depth acquisitions, superpose cumulated spike events between frames, and
     compares the result with the "blended" data provided by the authors of MVSEC dataset.
@@ -217,7 +156,8 @@ def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
 
     # prepare to save a video file
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter("reconstituted_vs_blended.mp4", fourcc, FPS, (346, 260*2))
+    video_shape = (346, 260 * 2) if Lblended is not None else (346, 260)
+    out = cv2.VideoWriter("reconstituted_vs_blended.mp4", fourcc, LIDAR_FPS, video_shape)
 
     frame = Ldepths_rect[currentFrame]
     frame = np.nan_to_num(frame, copy=True, nan=0)
@@ -228,7 +168,7 @@ def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
 
         # if the time of event i does not exceed the time of the next time step
         # (the first spike event comes 0.2605787s before the first lidar acquisition for this sequence)
-        if listTime[i] < 0.2605787 + currentFrame * 1/FPS:
+        if listTime[i] < listTime[0] + currentFrame * 1 / LIDAR_FPS:
 
             # register it and mark it on the current frame
             if listIndX[i] < 346 and listIndY[i] < 260:
@@ -247,7 +187,7 @@ def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
                 frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
                 frame = frame.astype(np.uint8)
-            except ValueError as e:
+            except IndexError as e:
                 print(e)
                 print("Some events remained after the last Lidar acquisition. Ignoring them...")
                 break
@@ -260,13 +200,15 @@ def mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended):
 
     # Finally, just show all frames edited with spike events
     print("showing video sequence...\n")
-    for f, j in zip(frames, range(len(Lblended))):
-        f = np.concatenate((f, Lblended[j]), axis=0)  # concatenate to show left and right images side by side
+    for f, j in zip(frames, range(len(frames))):
+        if Lblended is not None:
+            f = np.concatenate((f, Lblended[j]), axis=0)  # concatenate to show left and right images side by side
         cv2.imshow("cumulated spikes on depth map", f)
         out.write(f)
-        cv2.waitKey(int(1000 / FPS))
+        cv2.waitKey(int(1000 / LIDAR_FPS))
 
     out.release()
+    cv2.destroyAllWindows()
     print("saved video sequence to 'reconstituted_vs_blended.mp4'...\n")
 
 
@@ -275,8 +217,8 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
     Cumulates spikes into frames that are synchronized with the labels of the depth labels timestamps.
     Frames will have shape [2 (polarities), W, H], the first channel being for ON events and the second for OFF events.
 
-    Note: By default, spikes are accumulated over frames of duration dt = 1/FPS = 50 ms. In fact,
-        dt = 1 / (FPS * num_frames_per_depth_map)
+    Note: By default, spikes are accumulated over frames of duration dt = 1/LIDAR_FPS = 50 ms. In fact,
+        dt = 1 / (LIDAR_FPS * num_frames_per_depth_map)
         Equivalence Table :
         ---------------------------------------------
           dt (ms)    |     num_frames_per_depth_map |
@@ -286,7 +228,7 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
           5          |         10
           1          |         25
 
-    :param events: events with their timestamps being floats (not converted to integer yet)
+    :param events: events with their timestamps being floats (not converted to integer yet) EVENTS: X Y TIME POLARITY
     :param depth_rect_ts: depth maps
     :param depth_rect_ts: timestamps of the depth maps
     :return: a tensor of shape [# of frames, 2 (polarities), W, H] containing the cumulated spikes, and a tensor of
@@ -295,72 +237,88 @@ def mvsecCumulateSpikesIntoFrames(events, depth_rect, depth_rect_ts, num_frames_
     assert num_frames_per_depth_map in [1, 2, 5, 10, 25], "num_frames_per_depth_map must divide 50 ! Choose another " \
                                                           "value among [1, 2, 5, 10, 25] ..."
     print("\nCumulating spikes into frames and synchronizing with ground-truth...")
-    print("Time interval of each frame: dt = " + str(50/num_frames_per_depth_map) + " ms")
+    print("Time interval of each frame: dt = " + str(50 / num_frames_per_depth_map) + " ms")
 
-    fps = num_frames_per_depth_map * FPS
-    currentFrame = 0
-    currentMap = 0
-    frames = []
+    fps = num_frames_per_depth_map * LIDAR_FPS
+    chunksequence = []
     maps = []
 
-    # spike events variables
-    listIndX = [int(spk[0]) for spk in events]
-    listIndY = [int(spk[1]) for spk in events]
-    listTime = [spk[2] for spk in events]
-    listPol = [spk[3] for spk in events]
-    first_spike_time = listTime[0]
-    listTime[:] -= first_spike_time  # set the first event to time t0=0s
-    depth_rect_ts[:] -= first_spike_time  # the first spike happens before the first lidar acquisition
+    # remove the temporal offset on timestamps; the first spike happens before the first lidar acquisition
+    first_spike_time = events[0, 2]
+    events[:, 2] -= first_spike_time
+    depth_rect_ts[:] -= first_spike_time
 
-    while depth_rect_ts[0] >= 0:  # create dummy timestamps and labels before the first timestamp
-        depth_rect_ts = np.insert(depth_rect_ts, 0, depth_rect_ts[0] - (1 / fps))
-        depth_rect = np.insert(depth_rect, 0, depth_rect[0], axis=0)
+    for numchunk in tqdm(range(len(depth_rect_ts))):  # we have as many chunks as groundtruth maps
 
-    frame = np.zeros((2, 260, 346), dtype='float')
-    for i in tqdm(range(len(events))):  # loop over spike events
+        chunk = []
 
-        # if the time of event i does not exceed the timestamp of the next lidar acquisition
-        # (the first spike event comes depth_rect_ts[0] before the first lidar acquisition for this sequence)
-        if listTime[i] < depth_rect_ts[0] + currentFrame * 1 / fps:
+        for numframe in range(num_frames_per_depth_map):  # we get num_frames_per_depth_map frames per chunk
 
-            # register it and mark it on the current frame
-            if listIndX[i] < 346 and listIndY[i] < 260:
-                if listPol[i] == 1:
-                    frame[0, listIndY[i], listIndX[i]] += 1  # register ON event
-                else:
-                    frame[1, listIndY[i], listIndX[i]] += 1  # register OFF event
+            # events that occur between the timestamps of the current and the next frame
+            start_ts = numchunk*num_frames_per_depth_map*1/fps + numframe*1/fps
+            end_ts = numchunk*num_frames_per_depth_map*1/fps + numframe*1/fps + 1/fps
+            filt_events = events[(events[:, 2] > start_ts) & (events[:, 2] < end_ts)]
 
-        # otherwise, save the currently edited frame, go to the next, and register the event on this new frame as before
-        else:
-            frames.append(frame)
-            maps.append(depth_rect[currentMap])
-            currentMap = 1 + currentFrame // num_frames_per_depth_map  # remember that the first depth map has only 1 frame corresponding to it
-            currentFrame += 1
+            # create new 2 channel frame to accumulate spikes on
             frame = np.zeros((2, 260, 346), dtype='float')
 
-            if listIndX[i] < 346 and listIndY[i] < 260:
-                if listPol[i] == 1:
-                    frame[0, listIndY[i], listIndX[i]] += 1  # register ON event
+            for numevent in range(len(filt_events)):
+
+                event_X = int(filt_events[numevent, 0])
+                event_Y = int(filt_events[numevent, 1])
+                event_POL = filt_events[numevent, 3]
+
+                if event_POL == 1:
+                    frame[0, event_Y, event_X] += 1  # register ON event on channel 0
                 else:
-                    frame[1, listIndY[i], listIndX[i]] += 1  # register OFF event
+                    frame[1, event_Y, event_X] += 1  # register OFF event on channel 1
 
-        # break once we treated all events having a label
-        # the total number of frames we should have is (1 + (len(depth_ts) - 1) * num_frames_per_depth_map), because we
-        # process the first depth map differently, i.e. we cumulate all spikes occuring before the first depth map on
-        # the first frame. All other depth maps give each num_frames_per_depth_map depth maps.
-        if currentFrame == 1 + (len(depth_rect_ts) - 1) * num_frames_per_depth_map:
-            break
+            chunk.append(frame)
 
-    return np.array(frames), np.array(maps)
+        chunksequence.append(chunk)
+        maps.append(depth_rect[numchunk])
+
+    return np.array(chunksequence), np.array(maps)
+
+
+def mvsecToVideo(images):
+    """
+    Produces a video file with DAVIS grayscale images.
+    This allows to visualize more easily the dataset footage.
+
+    :param images: DAVIS left or right image
+    :return:
+    """
+    print("\nMerging frames of the sequence into a video for visualization...")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter('grayscale.mp4', fourcc, DAVIS_FPS, (346, 260))
+
+    for i in tqdm(range(len(images))):
+        f = images[i]
+        f = np.nan_to_num(f, copy=True,
+                          nan=255)  # small processing of the depth maps; DO NOT DO THIS FOR TRAINING A SNN
+        f = cv2.normalize(f, None, 0, 255, cv2.NORM_MINMAX)
+        f = cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
+        f = f.astype(np.uint8)
+
+        cv2.imshow("grayscale", f)
+        out.write(f)
+        cv2.waitKey(int(1000 / DAVIS_FPS))
+
+    out.release()
 
 
 if __name__ == '__main__':
     # load dataset files
     root = '/home/ulysse/Desktop/PFE CerCo/datasets/MVSEC/'
-    datafile = root + 'indoor_flying/indoor_flying4_data'
+    datafile = root + 'indoor_flying/indoor_flying1_data'
     data = h5py.File(datafile + '.hdf5', 'r')
-    datafile_gt = root + 'indoor_flying/indoor_flying4_gt'
+    datafile_gt = root + 'indoor_flying/indoor_flying1_gt'
     data_gt = h5py.File(datafile_gt + '.hdf5', 'r')
+
+    # raw grayscale images
+    images = data['davis']['left']['image_raw']
+    mvsecToVideo(images)
 
     # depth maps
     Ldepths_rect = data_gt['davis']['left']['depth_image_rect']  # RECTIFIED / LEFT
@@ -389,11 +347,8 @@ if __name__ == '__main__':
     rect_Revents = mvsecRectifyEvents(Revents, Rx_map, Ry_map)
 
     # show data in a video file (cumulated spikes between frames)
-    AER_frames, sync_labels = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts, 2)
-    mvsecSpikesAndDepth(Ldepths_rect, rect_Levents, Lblended)
-    #mvsecSpikesAndDepth(Ldepths_rect, Levents, Lblended)
-    #mvsecShowBlended(Lblended, Rblended)
-    #mvsecShowDepth(Ldepths_rect, Rdepths_rect, Ldepths_raw, Rdepths_raw, Rblended, Lblended)
-    #mvsecToVideo(datafile, events, images)
-    #mvsecReadEvents(events)
-
+    mvsecToVideo(images)
+    # AER_frames, sync_labels = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts, 2)
+    # mvsecSpikesAndDepth(Ldepths_rect, rect_Levents, Lblended)
+    # mvsecShowBlended(Lblended, Rblended)
+    # mvsecShowDepth(Ldepths_rect, Rdepths_rect, Ldepths_raw, Rdepths_raw, Rblended, Lblended)
