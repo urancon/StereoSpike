@@ -68,39 +68,6 @@ for epoch in range(n_epochs):
 
         running_loss += loss.item() * chunk.size(0)
 
-
-        """
-        # Is this a correct way of doing a TBPTT with k2 > k1 ?
-        (outside for loop) : 
-        i = 1
-                
-        (here) : 
-        if i % 2:
-            loss = F.mse_loss(out_depth_potentials, label)
-            loss.backward()  # retain_graph can be False for k1 = k2 cases of the TBPTT
-            optimizer.step()
-            net.detach()
-            optimizer.zero_grad()
-        
-        """
-
-        """
-        # TBPTT with k1 = k2 = 5 timesteps
-        if currentFrame % 5 == 0:
-            loss = F.mse_loss(out_depth_potentials.squeeze(), label.squeeze())  # TODO: use custom loss
-            loss = Total_Loss(out_depth_potentials.squeeze(), label.squeeze())
-
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.item() * frame.size(0)
-
-            net.detach()
-            optimizer.zero_grad()
-
-        currentFrame += 1
-        """
-
     epoch_loss = running_loss / (len(train_data_loader)/n_epochs)
     print("Loss:", epoch_loss)
 
