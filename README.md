@@ -1,5 +1,5 @@
 # Depth-SNN
-*Depth estimation with Spiking Neural Networks (SNN) on Dynamic Vision Sensor (DVS) data.*
+*Depth estimation with Spiking Neural Networks (SNN) on Dynamic Vision Sensor (DVS) data in a binocular setup.*
 
 In progress - March-August 2021.
 
@@ -36,5 +36,30 @@ powerful CUDA acceleration (up to ~300 faster than naive Pytorch).
 
 ## Installation
 
+First install Spikingelly from source by following the instruction on their official [Github repo](https://github.com/fangwei123456/spikingjelly).
+**Caution**: do not use PyPI / pip installation if you want to use special CUDA acceleration !
 
+Then install other dependencies with ```pip3 install -r requirements.txt```.
+
+Manually download *indoor_flying* and *outdoor_day* sequences from [MVSEC website](https://daniilidis-group.github.io/mvsec/) 
+**under hdf5 format**. Extract and order them so that they follow this architecture:
+
+```
+dataset/
+├── outdoor_day/
+│   └── outdoor_day1_data.hdf5
+│   ├── outdoor_day1_gt.hdf5
+│   ├── ...
+│   └── outdoor_day2_calib/
+│       ├── camchain-imucam-outdoor_day.yaml
+│       ├── outdoor_day_left_x_map.txt
+│       └── ...
+└── ...
+```
+
+You can now launch a training by ```python3 train.py```. Once the training is done, you can use the trained model for inference
+with ```python3 inference.py```.
+
+
+## General
 
