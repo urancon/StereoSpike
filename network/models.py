@@ -40,6 +40,170 @@ class DepthSNN(NeuromorphicNet):
         pass
 
 
+class SpikeFlowNetLike_cext(nn.Module):
+    """
+    A SpikeFlowNetLike network, but with spikingjelly's special CUDA cext acceleration.
+    """
+
+    @staticmethod
+    def crop_like(input_tensor, target):
+        if input_tensor.size()[2:] == target.size()[2:]:
+            return input_tensor
+        else:
+            return input_tensor[:, :, :, :target.size(3), :target.size(4)]
+
+    def __init__(self, tau, T, v_threshold=1.0, v_reset=0.0, v_infinite_thresh=float('inf')):
+        super().__init__()
+        # SNN-related parameters
+        self.T = T
+
+        # encoder layers (downsampling)
+        self.conv1 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(in_channels=2, out_channels=64, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(64),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv2 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(128),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv3 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(256),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv4 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(in_channels=256, out_channels=512, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(512),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+
+        # residual layers
+        self.conv_r11 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(512),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv_r12 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(512),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv_r21 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(512),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.conv_r22 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+                nn.BatchNorm2d(512),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+
+        # decoder layers (upsampling)
+        self.deconv4 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(256),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.deconv3 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.deconv2 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+        self.deconv1 = nn.Sequential(
+            layer.SeqToANNContainer(
+                nn.ConvTranspose2d(64, 2, kernel_size=4, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(2),
+            ),
+            cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+        )
+
+        # these layers output depth maps at different scales, where depth is represented by the potential of IF neurons
+        # that do not fire ("I-neurons"), i.e., with an infinite threshold.
+        self.predict_depth = nn.Sequential(
+            layer.SeqToANNContainer(
+                # nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1, bias=False),
+                # nn.BatchNorm2d(1),
+                OneToOne((2, 260, 346)),
+            ),
+            cext_neuron.MultiStepIFNode(v_threshold=v_infinite_thresh, v_reset=v_reset, surrogate_function='ATan'),
+        )
+
+        self.final_activation = nn.Sequential(nn.Softplus())
+
+    def detach(self):
+        for m in self.modules():
+            if isinstance(m, cext_neuron.BaseNode):
+                m.v.detach_()
+            elif isinstance(m, layer.Dropout):
+                m.mask.detach_()
+
+    def forward(self, x):
+        # x must be of shape [batch_size, num_frames_per_depth_map, 2 (polarities), W, H]
+
+        # x must be of shape [T, N, C, W, H], so we change it a bit: [N, T, C, W, H] -> [T, N, C, W, H]
+        x = x.permute(1, 0, 2, 3, 4)
+
+        # then just forward through the network
+
+        # pass through encoder layers
+        out_conv1 = self.conv1(x)
+        out_conv2 = self.conv2(out_conv1)
+        out_conv3 = self.conv3(out_conv2)
+        out_conv4 = self.conv4(out_conv3)
+
+        # pass through residual blocks
+        out_rconv11 = self.conv_r11(out_conv4)
+        out_rconv12 = self.conv_r12(out_rconv11) + out_conv4
+        out_rconv21 = self.conv_r21(out_rconv12)
+        out_rconv22 = self.conv_r22(out_rconv21) + out_rconv12
+
+        # gradually upsample while concatenating and passing through skip connections
+        out_deconv4 = self.deconv4(out_rconv22)
+        out_add4 = self.crop_like(out_deconv4, out_conv3) + out_conv3
+
+        out_deconv3 = self.deconv3(out_add4)
+        out_add3 = self.crop_like(out_deconv3, out_conv2) + out_conv2
+
+        out_deconv2 = self.deconv2(out_add3)
+        out_add2 = self.crop_like(out_deconv2, out_conv1) + out_conv1
+
+        out_deconv1 = self.deconv1(out_add2)
+
+        out_depth1 = self.predict_depth(out_deconv1)
+
+        return self.predict_depth[-1].v
+
+
 class SpikeFlowNetLike(nn.Module):
     """
     A full spiking Spike-FlowNet network, but for monocular depth estimation.
@@ -126,14 +290,6 @@ class SpikeFlowNetLike(nn.Module):
                 m.mask.detach_()
 
     def forward(self, x):
-        #  TODO: in Spike-FlowNet, "the loss is evaluated after forward-propagating all consecutive input event frames
-        #   within the time window"
-
-        # TODO: use spikingjelly's layer-by-layer mode, instead of step-by-step as it is now
-
-        # TODO: on my personal computer, too much memory is needed for a simple inference on 1 frame with T=100 !!! we
-        #  need to know the memory limitations of our data representation
-
         # x must be of shape [batch_size, num_frames_per_depth_map, 2 (polarities), W, H]
 
         for t in range(x.shape[1]):
