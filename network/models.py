@@ -108,36 +108,6 @@ class SpikeFlowNetLike_cext(NeuromorphicNet):
         )
 
         # residual layers
-        """
-        self.conv_r11 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(512),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
-        )
-        self.conv_r12 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(512),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
-        )
-        self.conv_r21 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(512),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
-        )
-        self.conv_r22 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(512),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
-        )
-        """
         self.bottleneck = nn.Sequential(
             cext_SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
             cext_SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
@@ -201,16 +171,10 @@ class SpikeFlowNetLike_cext(NeuromorphicNet):
         out_conv4 = self.conv4(out_conv3)
 
         # pass through residual blocks
-        """
-        out_rconv11 = self.conv_r11(out_conv4)
-        out_rconv12 = self.conv_r12(out_rconv11) + out_conv4
-        out_rconv21 = self.conv_r21(out_rconv12)
-        out_rconv22 = self.conv_r22(out_rconv21) + out_rconv12
-        """
-        out_rconv22 = self.bottleneck(out_conv4)
+        out_rconv = self.bottleneck(out_conv4)
 
         # gradually upsample while concatenating and passing through skip connections
-        out_deconv4 = self.deconv4(out_rconv22)
+        out_deconv4 = self.deconv4(out_rconv)
         out_add4 = self.crop_like(out_deconv4, out_conv3) + out_conv3
 
         out_deconv3 = self.deconv3(out_add4)
