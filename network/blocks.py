@@ -7,6 +7,10 @@ from torch.nn.parameter import Parameter
 
 from spikingjelly.clock_driven import functional, layer, surrogate
 from spikingjelly.clock_driven import neuron
+from spikingjelly.cext import neuron as cext_neuron
+
+from .plif import ParametricLIFNode, MultiStepParametricLIFNode
+from .csrc.element_wise import SpikesOR
 
 
 class OneToOne(nn.Module):
@@ -18,7 +22,7 @@ class OneToOne(nn.Module):
      be ground pixels for instance, and there the depth variations are inferior than those on the top of the image.
 
     UPDATE: it actually turns out not to be a good idea to use such weight connections between the last LIF and IF
-     neurons. Proof:
+     neurons, if there is only one input channel. Proof:
 
         So we have LIF -> one-to-one -> IF at the end of the SNN.
         Suppose, for a particular output IF neuron at time t, a depth of 10 m to predict with its non-leaking potential.
@@ -30,6 +34,18 @@ class OneToOne(nn.Module):
         But the only way for it to do so is by receiving negative-weighted spikes from the preceding layer.
         For instance, the preceding LIF neuron would emit 1 spike with a one-to-one weight of -1 m/spk.
         But that cannot be, since this weight already equals +1 m/spk !
+
+    SOLUTION: intuitively, we could instead define an N-to-One connection between an input volume with several channels
+     and the output depth map. For instance, 2 channels solve the issue above, because such a 2-to-One connection can
+     have two weights per output pixel: one for increasing the depth / potential, the other for decreasing it.
+
+    HOWEVER: with fixed update weights and a limited number of timesteps (and therefore of spikes, because there is at
+     most 1 spike per timestep) to update the output potential / depth at a pixel, it is impossible to follow depth
+     changes greater than the number of timesteps between two labels * the (positive or negative) weight.
+
+    SOLUTION: this hints at prefering N-to-One connections with N >> 2 for more dynamic and accurate depth estimations.
+     For example, a 4-to-One connection can have 2 positive and 2 negative weights for a same output pixel / neuron:
+     one smaller and one larger for each, thus allowing the translation of larger or finer depth changes.
     """
 
     __constants__ = ['in_features']
@@ -59,6 +75,57 @@ class OneToOne(nn.Module):
         )
 
 
+class cext_SEWResBlock(nn.Module):
+    """
+    Spike-Element-Wise (SEW) residual block as it is described in the paper "Spike-based residual blocks".
+    See https://arxiv.org/abs/2102.04159
+
+    TODO: Use Wei's code for different connect functions.
+    TODO? Use a more optimized version, like Wei's ?
+    """
+    def __init__(self, in_channels: int, connect_function='ADD', use_plif=True, tau=2., v_threshold=1., v_reset=0.):
+        super(cext_SEWResBlock, self).__init__()
+
+        self.conv1 = layer.SeqToANNContainer(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+            nn.BatchNorm2d(in_channels),
+        )
+
+        self.sn1 = MultiStepParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_reset=True)
+
+        self.conv2 = layer.SeqToANNContainer(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
+            nn.BatchNorm2d(in_channels),
+        )
+
+        self.sn2 = MultiStepParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_reset=True)
+
+        self.connect_function = connect_function
+
+    def forward(self, x):
+
+        identity = x
+
+        out = self.conv1(x)
+        out = self.sn1(out)
+        out = self.conv2(out)
+        out = self.sn2(out)
+
+        if self.connect_function == 'ADD':
+            out += identity
+        elif self.connect_function == 'MUL' or self.connect_f == 'AND':
+            out *= identity
+        elif self.connect_function == 'OR':
+            out = SpikesOR.apply(out, identity)
+        elif self.connect_function == 'NMUL':
+            raise NotImplementedError(self.connect_f)
+            # out = identity * (1. - out)
+        else:
+            raise NotImplementedError(self.connect_f)
+
+        return out
+
+
 class SEWResBlock(nn.Module):
     """
     Spike-Element-Wise (SEW) residual block as it is described in the paper "Spike-based residual blocks".
@@ -67,17 +134,23 @@ class SEWResBlock(nn.Module):
     TODO: Use Wei's code for different connect functions.
     TODO? Use a more optimized version, like Wei's ?
     """
-    def __init__(self, in_channels: int, connect_function='ADD', tau=2., v_threshold=1., v_reset=0.):
+    def __init__(self, in_channels: int, connect_function='ADD', use_plif=True, tau=2., v_threshold=1., v_reset=0.):
         super(SEWResBlock, self).__init__()
 
-        self.layers = nn.Sequential(
+
+        self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3-1)//2, bias=False),
             nn.BatchNorm2d(in_channels),
-            neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3 - 1) // 2, bias=False),
-            nn.BatchNorm2d(in_channels),
-            neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
+
+        self.sn1 = ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_reset=True)
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3-1)//2, bias=False),
+            nn.BatchNorm2d(in_channels),
+        )
+
+        self.sn2 = ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_reset=True)
 
         self.connect_function = connect_function
 
@@ -85,15 +158,17 @@ class SEWResBlock(nn.Module):
 
         identity = x
 
-        out = self.layers(x)
+        out = self.conv1(x)
+        out = self.sn1(out)
+        out = self.conv2(out)
+        out = self.sn2(out)
 
         if self.connect_function == 'ADD':
             out += identity
         elif self.connect_function == 'MUL' or self.connect_f == 'AND':
             out *= identity
         elif self.connect_function == 'OR':
-            raise NotImplementedError(self.connect_f)
-            # out = SpikesOR.apply(out, identity)
+            out = SpikesOR.apply(out, identity)
         elif self.connect_function == 'NMUL':
             raise NotImplementedError(self.connect_f)
             # out = identity * (1. - out)
