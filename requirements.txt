@@ -1,6 +1,6 @@
 # minimal requirements
 torch
-cv2
+opencv-python
 h5py
 tqdm
 

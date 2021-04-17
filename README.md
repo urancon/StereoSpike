@@ -47,7 +47,7 @@ Manually download *indoor_flying* and *outdoor_day* sequences from [MVSEC websit
 ```
 dataset/
 ├── outdoor_day/
-│   └── outdoor_day1_data.hdf5
+│   ├── outdoor_day1_data.hdf5
 │   ├── outdoor_day1_gt.hdf5
 │   ├── ...
 │   └── outdoor_day2_calib/

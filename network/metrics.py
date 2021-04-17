@@ -22,17 +22,21 @@ def mask_dead_pixels(predicted, groundtruth):
     return predicted, groundtruth
 
 
-def lin_to_log_depths(depths_rect_lin, Dmax=255, alpha=12.4):
+def lin_to_log_depths(depths_rect_lin, Dmax=10, alpha=9.2):
     """
     Applies normalized logarithm to the input depth maps. Log depth maps can represent large variations in a compact
     range, hence facilitating learning.
     Refer to the paper 'Learning Monocular Depth from Events' (3DV 2020) for more details.
 
     Basically,
-    (Dlin + 1) = Dmax * exp(-alpha * (1-Dlog))
+    Dlin = Dmax * exp(-alpha * (1-Dlog))
 
     We only do this operation on elements that are different from 0 and 255, since those values (although present in the
      dataset) have no physical meaning and hinder learning
+
+    With Dmax=10 and alpha=9.2, the minimum depth that can be predicted is of 0.001 meter.
+
+    Also, predicted log depth should belong to [0; 1] interval.
 
     :param depths_rect_lin:  a tensor of shape [# of depth maps, W, H] containing depth maps at original linear scale
     :param Dmax: maximum expected depth
@@ -45,7 +49,7 @@ def lin_to_log_depths(depths_rect_lin, Dmax=255, alpha=12.4):
     return depths_rect_lin
 
 
-def log_to_lin_depths(depths_rect_log, Dmax=255, alpha=12.4):
+def log_to_lin_depths(depths_rect_log, Dmax=10, alpha=9.2):
     """
     Inverse operation. Takes log depth maps, return lin depth maps, while ignoring invalid pixels
 
@@ -75,7 +79,7 @@ def MeanDepthError(predicted, groundtruth):
     n = torch.count_nonzero(mask)  # number of valid pixels
     res = predicted - groundtruth  # calculate the residual
     res = res * mask
-    return torch.abs(res)/n
+    return torch.sum(torch.abs(res))/n
 
 
 def ScaleInvariant_Loss(predicted, groundtruth):
@@ -116,8 +120,11 @@ def GradientMatching_Loss(predicted, groundtruth):
     :param groundtruth:
     :return:
     """
-    n = predicted.numel()
-    res = (predicted - groundtruth).view((1, 1, 260, 346))
+    mask = (groundtruth != 0) & (groundtruth != 255)  # only consider valid groundtruth pixels
+    n = torch.count_nonzero(mask)  # number of valid pixels
+    res = predicted - groundtruth  # calculate the residual
+    res = res * mask
+    res = res.view((1, 1, 260, 346))
 
     if torch.cuda.is_available():
         sobelX = torch.Tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]]).view((1, 1, 3, 3)).cuda()
@@ -129,9 +136,11 @@ def GradientMatching_Loss(predicted, groundtruth):
     grad_res_x = F.conv2d(res, sobelX)
     grad_res_y = F.conv2d(res, sobelY)
 
+    # TODO: tel quel, somme aussi les valeurs de gradient pour les pixels non valides !
+    #  il faut donc faire un padding 'same' et masquer les gradients !
     return 1/n * torch.sum(torch.abs(grad_res_x) + torch.abs(grad_res_y))
 
 
-def Total_Loss(predicted, groundtruth, alpha=0.5):
+def Total_Loss(predicted, groundtruth, alpha=0.1):
     return ScaleInvariant_Loss(predicted, groundtruth) + alpha * GradientMatching_Loss(predicted, groundtruth)
 
