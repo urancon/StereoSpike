@@ -75,12 +75,35 @@ class OneToOne(nn.Module):
         )
 
 
+class NNConvUpsampling(nn.Module):
+    """
+    Upsampling block made to address the production of checkerboard artifacts by transposed convolutions.
+    Nearest neighbour (NN) upsampling combined to regular convolutions efficiently gets rid of these patterns.
+    Linear interpolation (among others) can produce non-integer values (e.g. 0.5 between 0 and 1), which go against the
+    philosophy of spiking neural networks, which receive integer amounts of input spikes. Having noticed that, NN
+    upsampling is compatible with SNN's philosophy and could be implemented on dedicated hardware.
+
+    See https://distill.pub/2016/deconv-checkerboard/ for more insights on this phenomenon.
+    """
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, up_size: tuple):
+        super(NNConvUpsampling, self).__init__()
+
+        self.up = nn.Sequential(
+            nn.UpsamplingNearest2d(size=(up_size[0] + (kernel_size - 1), up_size[1] + (kernel_size - 1))),
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(out_channels),
+        )
+
+    def forward(self, x):
+        out = self.up(x)
+        return out
+
+
 class cext_SEWResBlock(nn.Module):
     """
     Spike-Element-Wise (SEW) residual block as it is described in the paper "Spike-based residual blocks".
     See https://arxiv.org/abs/2102.04159
 
-    TODO: Use Wei's code for different connect functions.
     TODO? Use a more optimized version, like Wei's ?
     """
     def __init__(self, in_channels: int, connect_function='ADD', use_plif=True, tau=2., v_threshold=1., v_reset=0.):
@@ -118,8 +141,7 @@ class cext_SEWResBlock(nn.Module):
         elif self.connect_function == 'OR':
             out = SpikesOR.apply(out, identity)
         elif self.connect_function == 'NMUL':
-            raise NotImplementedError(self.connect_f)
-            # out = identity * (1. - out)
+            out = identity * (1. - out)
         else:
             raise NotImplementedError(self.connect_f)
 
@@ -131,12 +153,10 @@ class SEWResBlock(nn.Module):
     Spike-Element-Wise (SEW) residual block as it is described in the paper "Spike-based residual blocks".
     See https://arxiv.org/abs/2102.04159
 
-    TODO: Use Wei's code for different connect functions.
     TODO? Use a more optimized version, like Wei's ?
     """
     def __init__(self, in_channels: int, connect_function='ADD', use_plif=True, tau=2., v_threshold=1., v_reset=0.):
         super(SEWResBlock, self).__init__()
-
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=(3-1)//2, bias=False),
@@ -170,8 +190,7 @@ class SEWResBlock(nn.Module):
         elif self.connect_function == 'OR':
             out = SpikesOR.apply(out, identity)
         elif self.connect_function == 'NMUL':
-            raise NotImplementedError(self.connect_f)
-            # out = identity * (1. - out)
+            out = identity * (1. - out)
         else:
             raise NotImplementedError(self.connect_f)
 
