@@ -55,7 +55,16 @@ class ApproximatedTBPTT:
 
     def train(self, train_data_loader, nfpdm=5, N=1):
 
+        print("\n################")
+        print("#   TRAINING   #")
+        print("################\n")
+
         logfile = open("./checkpoints/training_logs.txt", "w+")
+
+        print("\nTraining with approximated TBPTT procedure: {} frames between labels, k1=1, k2=N*K1, N={}\n".format(nfpdm, N))
+        logfile.write("Training with approximated TBPTT procedure: {} frames between labels, k1=1, k2=N*K1, N={}\n\n".format(nfpdm, N))
+
+        min_MDE = 100.0  # arbitrarily large value to account for worst performances at initialization
 
         for epoch in range(self.n_epochs):
             start_time = time.time()
@@ -99,7 +108,7 @@ class ApproximatedTBPTT:
                     # the others remain as they are
                     out_depth_potentials, label_batch = mask_dead_pixels(out_depth_potentials, label_batch)
 
-                    loss = self.loss_module(out_depth_potentials, label)
+                    loss = self.loss_module(out_depth_potentials, label_batch)
                     #loss = F.mse_loss(out_depth_potentials, label)
                     #loss = Total_Loss(out_depth_potentials, label, alpha=0.)
                     #loss = MeanDepthError(out_depth_potentials, label_batch)
@@ -117,56 +126,28 @@ class ApproximatedTBPTT:
                     chunk_batch = []
                     label_batch = []
 
-            epoch_loss = running_loss / (len(train_data_loader) / self.n_epochs)
+            epoch_loss = running_loss / len(train_data_loader)
 
             functional.reset_net(self.one_chunk_module)
 
-            chunk_sequence = []
-            label_sequence = []
-            chunk_batch = []
-            label_batch = []
-
+            # for evaluation, processes the sequence chunk by chunk
             self.one_chunk_module.eval()
             with torch.no_grad():
-                for i, (chunk, label) in enumerate(tqdm(train_data_loader)):
+                for chunk, label in tqdm(train_data_loader):
 
                     chunk = chunk[0].to(device=self.device,
-                                        dtype=torch.float)  # only take left DVS data for monocular depth estimation
+                                        dtype=torch.float)
                     label = label.to(self.device)
 
-                    chunk_sequence.append(chunk)
-                    label_sequence.append(label)
+                    out_depth_potentials = self.one_chunk_module(chunk)
 
-                    if (i + 1) % (2 * N - 1) == 0:
+                    out_depth_potentials, label = mask_dead_pixels(out_depth_potentials, label)
 
-                        # the batch dimension is equal to N, so a batch is composed of N shifted chunk sequences
-                        # e.g. N=3, chunk_sequence=[0, 1, 2, 3, 4] (len: 5=2N-1)
-                        # --> chunk_batch=[[0, 1, 2], [1, 2, 3], [2, 3, 4]]
-                        # --> label_batch=[2, 3, 4]
-                        for j in range(N):
-                            chunk_batch.append(torch.cat(chunk_sequence[j:N + j], dim=1))  # concatenate chunks along frame (time) dimension  [1, nfpdm, 2, H, W] --> [1, N*nfpdm, 2, H, W]
-                            label_batch.append(label_sequence[N-1+j])  # get the label corresponding to the chunk sequence --> [1, H, W]
-                        chunk_batch = torch.cat(chunk_batch, dim=0)  # concatenate along batch dimension --> [N, N*nfpdm, 2, H, W]
-                        label_batch = torch.cat(label_batch, dim=0)  # concatenate along batch dimension --> [N, H, W]
+                    self.one_chunk_module.detach()
 
-                        # the batches are ready now, train on them
-                        out_depth_potentials = self.one_chunk_module(chunk_batch)
+                    running_MDE += MeanDepthError(out_depth_potentials, label)
 
-                        # mask all invalid pixels, corresponding to pixels of the groundtruth with values of 0 or 255
-                        # these pixels become 0 in both prediction and groundtruth (so that residuals become 0 too),
-                        # the others remain as they are
-                        out_depth_potentials, label_batch = mask_dead_pixels(out_depth_potentials, label_batch)
-
-                        self.one_chunk_module.detach()
-
-                        running_MDE += MeanDepthError(out_depth_potentials, label)
-
-                        chunk_sequence = []
-                        label_sequence = []
-                        chunk_batch = []
-                        label_batch = []
-
-                    epoch_MDE = running_MDE / len(train_data_loader)
+                epoch_MDE = running_MDE / len(train_data_loader)
 
             end_time = time.time()
             epoch_summary = "Epoch: {}, Loss: {}, Mean Depth Error: {}, Time: {}\n".format(epoch, epoch_loss,
@@ -175,8 +156,11 @@ class ApproximatedTBPTT:
             print(epoch_summary)
             logfile.write(epoch_summary)
 
-        # save model
-        torch.save(self.one_chunk_module.state_dict(), "./checkpoints/spikeflownet_snn.pth")
+            # save model if better results
+            if epoch_MDE < min_MDE:
+                print("Best performances so far: saving model...\n")
+                torch.save(self.one_chunk_module.state_dict(), "./checkpoints/spikeflownet_snn.pth")
+                min_MDE = epoch_MDE
 
         # close log file
         logfile.close()
@@ -184,14 +168,14 @@ class ApproximatedTBPTT:
 
 if __name__ == "__main__":
     from mvsec import MVSEC
-    from network.models import SpikeFlowNetLike
+    from network.models import SpikeFlowNetLike, SpikeFlowNetLike_cext
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
     nfpdm = 5  # (!) don't choose it too big because of memory limitations (!)
     N = 1
     learning_rate = 0.0001
-    n_epochs = 10
+    n_epochs = 15
 
     dataset = MVSEC('/home/ulysse/Desktop/PFE CerCo/datasets/MVSEC/',
                     num_frames_per_depth_map=nfpdm,
@@ -205,7 +189,7 @@ if __name__ == "__main__":
                                                     drop_last=False,
                                                     pin_memory=True)
 
-    net = SpikeFlowNetLike(tau=10.,
+    net = SpikeFlowNetLike_cext(tau=10.,
                            v_threshold=1.0,
                            v_reset=0.0,
                            v_infinite_thresh=float('inf'),
@@ -221,5 +205,4 @@ if __name__ == "__main__":
     runner.train(train_data_loader, nfpdm=nfpdm, N=N)
 
     print("done")
-
 

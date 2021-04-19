@@ -1,23 +1,24 @@
 import h5py
 import numpy as np
+import matplotlib.pyplot as plt
+import cv2
 import torch
 from torch.utils.data.dataset import Dataset
 import spikingjelly
-from spikingjelly.datasets.utils import EventsFramesDatasetBase, integrate_events_to_frames, normalize_frame
 
 from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames, \
     mvsecSpikesAndDepth, mvsecToVideo
 from network.metrics import lin_to_log_depths
 
 
-SEQUENCES_FRAMES = {'indoor_flying': {'indoor_flying_1': (140, 1200),
+SEQUENCES_FRAMES = {'indoor_flying': {'indoor_flying_1': (140, 400),  # (140, 1200)
                                       'indoor_flying_2': (160, 1580),
                                       'indoor_flying_3': (125, 1815),
                                       'indoor_flying_4': (90, 360)}
                     }
 
 
-class MVSEC(EventsFramesDatasetBase):
+class MVSEC(Dataset):
     """
     Neuromorphic dataset class to hold MVSEC data.
 
@@ -33,21 +34,26 @@ class MVSEC(EventsFramesDatasetBase):
     def get_wh():
         return 346, 260
 
-    def __init__(self, root: str, num_frames_per_depth_map=1, normalization='max', take_log=True, show_sequence=False):
+    def __init__(self, root: str, num_frames_per_depth_map=1, normalization=None, take_log=True, show_sequence=False):
+        print("\n#####################################")
+        print("# LOADING AND PREPROCESSING DATASET #")
+        print("#####################################\n")
+
         self.root = root
         self.normalization = normalization
+        self.num_frames_per_depth_map = num_frames_per_depth_map
 
         # load the data
-        datafile = self.root + 'indoor_flying/indoor_flying4_data'
+        datafile = self.root + 'indoor_flying/indoor_flying1_data'
         data = h5py.File(datafile + '.hdf5', 'r')
-        datafile_gt = self.root + 'indoor_flying/indoor_flying4_gt'
+        datafile_gt = self.root + 'indoor_flying/indoor_flying1_gt'
         data_gt = h5py.File(datafile_gt + '.hdf5', 'r')
 
         # get the ground-truth depth maps (i.e. our labels) and their timestamps
         Ldepths_rect = np.array(data_gt['davis']['left']['depth_image_rect'])  # RECTIFIED / LEFT
         Rdepths_rect = np.array(data_gt['davis']['right']['depth_image_rect'])  # RECTIFIED / RIGHT
         Ldepths_rect_ts = np.array(data_gt['davis']['left']['depth_image_rect_ts'])
-        Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])  # TODO: Right depth map might be unnecessary !!!
+        Rdepths_rect_ts = np.array(data_gt['davis']['right']['depth_image_rect_ts'])
 
         # convert linear (metric) to normalized log depths if required
         if take_log:
@@ -55,7 +61,7 @@ class MVSEC(EventsFramesDatasetBase):
             Rdepths_rect = lin_to_log_depths(Rdepths_rect)
 
         # remove depth maps occurring during take-off and landing of the drone (bad data)
-        start_idx, end_idx = SEQUENCES_FRAMES['indoor_flying']['indoor_flying_4']
+        start_idx, end_idx = SEQUENCES_FRAMES['indoor_flying']['indoor_flying_1']
         Ldepths_rect = Ldepths_rect[start_idx:end_idx, :, :]
         Rdepths_rect = Rdepths_rect[start_idx:end_idx, :, :]
         Ldepths_rect_ts = Ldepths_rect_ts[start_idx:end_idx]
@@ -95,8 +101,9 @@ class MVSEC(EventsFramesDatasetBase):
         assert xL.shape == xR.shape
 
         if self.normalization is not None and self.normalization != 'frequency':
-            self.data_left = normalize_frame(xL, self.normalization)
-            self.data_right = normalize_frame(xR, self.normalization)
+            raise NotImplementedError(self.normalization)
+            #self.data_left = normalize_frame(xL, self.normalization)
+            #self.data_right = normalize_frame(xR, self.normalization)
         else:
             self.data_left = xL
             self.data_right = xR
@@ -123,6 +130,22 @@ class MVSEC(EventsFramesDatasetBase):
         label = self.labels[index]
         return [frame_left, frame_right], label
 
+    def show(self):
+        # TODO: les 2 premières frames de chaque chunk ont des pixels a 0.5, tandis que les suivantes en ont à 1 et à 2
+        #  determiner pourquoi !! Indice: normalisation de Wei (ligne 100 de ce fichier).
+        i = 0
+        for chunk in self.data_left:
+            i += 1
+            j = 0
+            for frame in chunk:
+                j +=1
+                f = frame[0]
+                #plt.imshow(f)
+                #plt.show()
+                cv2.imshow("cumulated ON event frames", f)
+                cv2.waitKey(int(1000 / (20 * self.num_frames_per_depth_map)))
+        cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     print(MVSEC.get_wh())
@@ -131,3 +154,4 @@ if __name__ == "__main__":
     x, y = dataset[0]
     print(x[0].shape)
     print(y.shape)
+
