@@ -75,6 +75,8 @@ def MeanDepthError(predicted, groundtruth):
     :param groundtruth: a a single-channel torch array of shape [W, H]
     :return: the MDE between the given prediction and label
     """
+    if type(predicted) == tuple:
+        predicted = predicted[0]
     mask = (groundtruth != 0) & (groundtruth != 255)  # only consider valid groundtruth pixels
     n = torch.count_nonzero(mask)  # number of valid pixels
     res = predicted - groundtruth  # calculate the residual
@@ -91,11 +93,6 @@ def ScaleInvariant_Loss(predicted, groundtruth):
     :param groundtruth:
     :return:
     """
-    # autre maniere de faire :
-    # res = predicted - groundtruth
-    # res = res[(groundtruth!=0) | (groundtruth!=255)]
-    # n = res.numel()
-
     mask = (groundtruth != 0) & (groundtruth != 255)  # only consider valid groundtruth pixels
     n = torch.count_nonzero(mask)  # number of valid pixels
     res = predicted - groundtruth  # calculate the residual
@@ -124,8 +121,9 @@ def GradientMatching_Loss(predicted, groundtruth):
     n = torch.count_nonzero(mask)  # number of valid pixels
     res = predicted - groundtruth  # calculate the residual
     res = res * mask
-    res = res.view((1, 1, 260, 346))
+    res = res.view((1, 1, groundtruth.shape[-2], groundtruth.shape[-1]))  # (1, 1, H, W)
 
+    # define sobel filters for each direction
     if torch.cuda.is_available():
         sobelX = torch.Tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]]).view((1, 1, 3, 3)).cuda()
         sobelY = torch.Tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]).view((1, 1, 3, 3)).cuda()
@@ -133,14 +131,35 @@ def GradientMatching_Loss(predicted, groundtruth):
         sobelX = torch.Tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]]).view((1, 1, 3, 3))
         sobelY = torch.Tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]).view((1, 1, 3, 3))
 
-    grad_res_x = F.conv2d(res, sobelX)
-    grad_res_y = F.conv2d(res, sobelY)
+    # stride and padding of 1 to keep the same resolution
+    grad_res_x = F.conv2d(res, sobelX, stride=1, padding=1)
+    grad_res_y = F.conv2d(res, sobelY, stride=1, padding=1)
 
-    # TODO: tel quel, somme aussi les valeurs de gradient pour les pixels non valides !
-    #  il faut donc faire un padding 'same' et masquer les gradients !
+    # use the value of the gradients only at valid pixel locations
+    grad_res_x *= mask
+    grad_res_y *= mask
+
     return 1/n * torch.sum(torch.abs(grad_res_x) + torch.abs(grad_res_y))
 
 
-def Total_Loss(predicted, groundtruth, alpha=0.1):
-    return ScaleInvariant_Loss(predicted, groundtruth) + alpha * GradientMatching_Loss(predicted, groundtruth)
+def MultiScale_GradientMatching_Loss(predicted, groundtruth):
+    """
+    Computes the gradient matching loss at each scale, then return the sum.
+
+    :param predicted:
+    :param groundtruth:
+    :return:
+    """
+    multiscale_loss = 0.0
+
+    for map in predicted:
+        scale = (map.shape[-2], map.shape[-1])
+        rescaled_gt = F.interpolate(groundtruth.unsqueeze(0), size=scale, mode='bilinear', align_corners=False)
+        multiscale_loss += GradientMatching_Loss(map, rescaled_gt)
+
+    return multiscale_loss
+
+
+def Total_Loss(predicted, groundtruth, alpha=0.5):
+    return ScaleInvariant_Loss(predicted[0], groundtruth) + alpha * MultiScale_GradientMatching_Loss(predicted, groundtruth)
 

@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from spikingjelly.clock_driven import functional
 
-from network.metrics import mask_dead_pixels, MeanDepthError, Total_Loss
+from network.metrics import mask_dead_pixels, MeanDepthError, Total_Loss, GradientMatching_Loss, MultiScale_GradientMatching_Loss
 
 
 class ApproximatedTBPTT:
@@ -103,15 +103,7 @@ class ApproximatedTBPTT:
                     # the batches are ready now, train on them
                     out_depth_potentials = self.one_chunk_module(chunk_batch)
 
-                    # mask all invalid pixels, corresponding to pixels of the groundtruth with values of 0 or 255
-                    # these pixels become 0 in both prediction and groundtruth (so that residuals become 0 too),
-                    # the others remain as they are
-                    out_depth_potentials, label_batch = mask_dead_pixels(out_depth_potentials, label_batch)
-
                     loss = self.loss_module(out_depth_potentials, label_batch)
-                    #loss = F.mse_loss(out_depth_potentials, label)
-                    #loss = Total_Loss(out_depth_potentials, label, alpha=0.)
-                    #loss = MeanDepthError(out_depth_potentials, label_batch)
 
                     loss.backward(retain_graph=True)  # retain_graph can be False for k1 = k2 cases of the TBPTT
                     optimizer.step()
@@ -141,8 +133,6 @@ class ApproximatedTBPTT:
 
                     out_depth_potentials = self.one_chunk_module(chunk)
 
-                    out_depth_potentials, label = mask_dead_pixels(out_depth_potentials, label)
-
                     self.one_chunk_module.detach()
 
                     running_MDE += MeanDepthError(out_depth_potentials, label)
@@ -168,7 +158,7 @@ class ApproximatedTBPTT:
 
 if __name__ == "__main__":
     from mvsec import MVSEC
-    from network.models import SpikeFlowNetLike, SpikeFlowNetLike_cext
+    from network.models import SpikeFlowNetLike, SpikeFlowNetLike_cext, SpikeFlowNetLike_multiscale
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -189,7 +179,7 @@ if __name__ == "__main__":
                                                     drop_last=False,
                                                     pin_memory=True)
 
-    net = SpikeFlowNetLike_cext(tau=10.,
+    net = SpikeFlowNetLike_multiscale(tau=10.,
                            v_threshold=1.0,
                            v_reset=0.0,
                            v_infinite_thresh=float('inf'),
@@ -198,8 +188,11 @@ if __name__ == "__main__":
                            ).to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
 
+    #loss_module = Total_Loss
     loss_module = MeanDepthError
     #loss_module = F.mse_loss
+    #loss_module = GradientMatching_Loss
+    #loss_module =  MultiScale_GradientMatching_Loss
 
     runner = ApproximatedTBPTT(net, loss_module, optimizer, n_epochs, device)
     runner.train(train_data_loader, nfpdm=nfpdm, N=N)
