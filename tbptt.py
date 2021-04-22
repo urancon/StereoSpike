@@ -1,4 +1,9 @@
+import io
+import random
 import time
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +12,90 @@ from tqdm import tqdm
 from spikingjelly.clock_driven import functional
 
 from network.metrics import mask_dead_pixels, MeanDepthError, Total_Loss, GradientMatching_Loss, MultiScale_GradientMatching_Loss
+
+
+def get_img_from_fig(fig, dpi=180):
+    """
+    A function that returns an image as numpy array from a pyplot figure.
+
+    :param fig:
+    :param dpi:
+    :return:
+    """
+    buf = io.BytesIO()
+
+    fig.savefig(buf, format="png", dpi=dpi)
+    buf.seek(0)
+    img_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
+    buf.close()
+
+    img = cv2.imdecode(img_arr, 1)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
+
+def show_learning(fig, chunk, out_depth_potentials, label):
+    """
+    On a pyplot figure, confront the outputs of the network with the corresponding groundtruths.
+
+    :param fig:
+    :param chunk:
+    :param out_depth_potentials:
+    :param label:
+    :return:
+    """
+    # 1. Prepare spike histogram for the plot
+    frame_ON = chunk[0, :, 0, :].sum(axis=0).cpu().numpy()
+    frame_OFF = chunk[0, :, 1, :].sum(axis=0).cpu().numpy()
+
+    frame = np.zeros((260, 346, 3), dtype='int16')
+
+    ON_mask = (frame_ON > 0) & (frame_OFF == 0)
+    OFF_mask = (frame_ON == 0) & (frame_OFF > 0)
+    ON_OFF_mask = (frame_ON > 0) & (frame_OFF > 0)
+
+    frame[ON_mask] = [255, 0, 0]
+    frame[OFF_mask] = [0, 0, 255]
+    frame[ON_OFF_mask] = [255, 25, 255]
+
+    ax1 = fig.add_subplot(1, 4, 1)
+    ax1.title.set_text('Input spike histogram')
+    plt.imshow(frame)
+    plt.axis('off')
+
+    # 2. Prepare network predictions for the plot
+    out_depth_potentials, label = mask_dead_pixels(out_depth_potentials, label)
+    
+    potentials_copy = out_depth_potentials[-1]
+    potentials_copy = potentials_copy.detach().cpu().numpy().squeeze()
+    error = np.abs(potentials_copy - label[-1].detach().cpu().numpy().squeeze())
+
+    ax1 = fig.add_subplot(1, 4, 2)
+    ax1.title.set_text('Prediction')
+    plt.imshow(potentials_copy)
+    plt.axis('off')
+
+    # 3. Prepare groundtruth map for the plot
+    ax2 = fig.add_subplot(1, 4, 3)
+    ax2.title.set_text('Groundtruth')
+    plt.imshow(label[-1].detach().cpu().numpy().squeeze())
+    plt.axis('off')
+
+    # 4. Also plot the error map (error per pixel)
+    ax3 = fig.add_subplot(1, 4, 4)
+    ax3.title.set_text('Pixel-wise absolute error')
+    plt.imshow(error)
+    plt.axis('off')
+
+    plt.draw()
+
+    #data = get_img_from_fig(fig, dpi=180)
+
+    plt.pause(0.0001)
+    plt.clf()
+
+    # cv2.imshow("cv2", data)
+    # cv2.waitKey(int(1000 / (20 * 5)))
 
 
 class ApproximatedTBPTT:
@@ -40,20 +129,18 @@ class ApproximatedTBPTT:
         To backpropagate on a longer temporal context, you could increase N. For instance, the preceding example section
          corresponds to the case N=1 and nfpdm=5.
 
-
-    TODO: use custom loss
-    TODO: add a learning rate scheduler
     TODO: add a tensorboard logger
     """
 
-    def __init__(self, one_chunk_module, loss_module, optimizer, n_epochs, device):
+    def __init__(self, one_chunk_module, loss_module, optimizer, lr_scheduler, n_epochs, device):
         self.one_chunk_module = one_chunk_module
         self.loss_module = loss_module
         self.optimizer = optimizer
+        self.lr_scheduler = lr_scheduler
         self.n_epochs = n_epochs
         self.device = device
 
-    def train(self, train_data_loader, nfpdm=5, N=1):
+    def train(self, train_data_loader, nfpdm=5, N=1, learn_on_log=False, show=False):
 
         print("\n################")
         print("#   TRAINING   #")
@@ -64,6 +151,10 @@ class ApproximatedTBPTT:
         print("\nTraining with approximated TBPTT procedure: {} frames between labels, k1=1, k2=N*K1, N={}\n".format(nfpdm, N))
         logfile.write("Training with approximated TBPTT procedure: {} frames between labels, k1=1, k2=N*K1, N={}\n\n".format(nfpdm, N))
 
+        if show:
+            plt.ion()
+            fig = plt.figure()
+
         min_MDE = 100.0  # arbitrarily large value to account for worst performances at initialization
 
         for epoch in range(self.n_epochs):
@@ -73,6 +164,15 @@ class ApproximatedTBPTT:
 
             # reset the potential of all neurons before each sequence (i.e., epoch)
             functional.reset_net(self.one_chunk_module)
+
+            # set the potentials of output IF neurons to an ideal state (i.e. the first gt of the sequence) for a good
+            # start. The idea is to not use all the network's expression capacity just to catch up with the ground truth
+            # at the beginning of the sequence, but rather learn the smaller depth changes occurring during the
+            # sequence.
+            # i.e., learn the "steady" state, not the "transient".
+            _, start_pots = next(iter(train_data_loader))
+            start_pots = start_pots.repeat((N, 1, 1)).to(self.device)
+            self.one_chunk_module.predict_depth[-1].v = start_pots
 
             chunk_sequence = []
             label_sequence = []
@@ -103,13 +203,17 @@ class ApproximatedTBPTT:
                     # the batches are ready now, train on them
                     out_depth_potentials = self.one_chunk_module(chunk_batch)
 
-                    loss = self.loss_module(out_depth_potentials, label_batch)
+                    # if required, confront the goutputs of the network to 
+                    if show:
+                        show_learning(fig, chunk_batch, out_depth_potentials, label_batch)
 
+                    loss = self.loss_module(out_depth_potentials, label_batch)
                     loss.backward(retain_graph=True)  # retain_graph can be False for k1 = k2 cases of the TBPTT
-                    optimizer.step()
+
+                    self.optimizer.step()
 
                     self.one_chunk_module.detach()
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
 
                     running_loss += loss.item() * chunk_batch.size(0)
 
@@ -122,7 +226,12 @@ class ApproximatedTBPTT:
 
             functional.reset_net(self.one_chunk_module)
 
+            _, start_pots = next(iter(train_data_loader))
+            start_pots = start_pots.repeat((N, 1, 1)).to(self.device)
+            self.one_chunk_module.predict_depth[-1].v = start_pots
+
             # for evaluation, processes the sequence chunk by chunk
+            # Note: in eval mode, the multiscale network only outputs the full resolution map
             self.one_chunk_module.eval()
             with torch.no_grad():
                 for chunk, label in tqdm(train_data_loader):
@@ -133,9 +242,12 @@ class ApproximatedTBPTT:
 
                     out_depth_potentials = self.one_chunk_module(chunk)
 
+                    if show:
+                        show_learning(fig, chunk, out_depth_potentials, label)
+
                     self.one_chunk_module.detach()
 
-                    running_MDE += MeanDepthError(out_depth_potentials, label)
+                    running_MDE += MeanDepthError(out_depth_potentials, label, learn_on_log)
 
                 epoch_MDE = running_MDE / len(train_data_loader)
 
@@ -145,6 +257,8 @@ class ApproximatedTBPTT:
                                                                                                end_time - start_time)
             print(epoch_summary)
             logfile.write(epoch_summary)
+
+            self.lr_scheduler.step()
 
             # save model if better results
             if epoch_MDE < min_MDE:
@@ -164,13 +278,14 @@ if __name__ == "__main__":
 
     nfpdm = 5  # (!) don't choose it too big because of memory limitations (!)
     N = 1
+    take_log = False
     learning_rate = 0.0001
     n_epochs = 15
 
     dataset = MVSEC('/home/ulysse/Desktop/PFE CerCo/datasets/MVSEC/',
                     num_frames_per_depth_map=nfpdm,
                     normalization=None,
-                    take_log=False,
+                    take_log=take_log,
                     show_sequence=False)
     train_data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                                     batch_size=1,
@@ -179,23 +294,25 @@ if __name__ == "__main__":
                                                     drop_last=False,
                                                     pin_memory=True)
 
-    net = SpikeFlowNetLike_multiscale(tau=10.,
+    net = SpikeFlowNetLike_cext(tau=10.,
                            v_threshold=1.0,
                            v_reset=0.0,
                            v_infinite_thresh=float('inf'),
                            final_activation=torch.abs,
                            use_plif=True
                            ).to(device)
+
     optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[4, 8, 15], gamma=0.1)
 
     #loss_module = Total_Loss
     loss_module = MeanDepthError
     #loss_module = F.mse_loss
     #loss_module = GradientMatching_Loss
-    #loss_module =  MultiScale_GradientMatching_Loss
+    #loss_module = MultiScale_GradientMatching_Loss
 
-    runner = ApproximatedTBPTT(net, loss_module, optimizer, n_epochs, device)
-    runner.train(train_data_loader, nfpdm=nfpdm, N=N)
+    runner = ApproximatedTBPTT(net, loss_module, optimizer, scheduler, n_epochs, device)
+    runner.train(train_data_loader, nfpdm=nfpdm, N=N, learn_on_log=take_log, show=True)
 
     print("done")
 
