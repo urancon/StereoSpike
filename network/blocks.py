@@ -75,6 +75,27 @@ class OneToOne(nn.Module):
         )
 
 
+class MultiplyBy(nn.Module):
+    """
+    Could potentially replace BatchNorm2d to get rid of the offset induced by it.
+    By multiplying input values by a certain parameter, it should allow subsequent PLIFNodes to actually spike and solve
+     the vanishing spike phenomenon that is observed without BatchNorm.
+
+    TODO: instead of learning it, make the scale_value gradually decay as we go further into the sequence ?
+    """
+
+    def __init__(self, scale_value: float = 5., learnable: bool = False) -> None:
+        super(MultiplyBy, self).__init__()
+
+        if learnable:
+            self.scale_value = Parameter(Tensor([scale_value]))
+        else:
+            self.scale_value = scale_value
+
+    def forward(self, input: Tensor) -> Tensor:
+        return torch.mul(input, self.scale_value)
+
+
 class NNConvUpsampling(nn.Module):
     """
     Upsampling block made to address the production of checkerboard artifacts by transposed convolutions.
