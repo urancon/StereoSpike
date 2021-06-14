@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import cv2
 import torch
 from torch.utils.data.dataset import Dataset
+from torchvision import transforms, utils
+import torchvision.transforms.functional as F
 import spikingjelly
 
 from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulateSpikesIntoFrames, \
@@ -11,8 +13,8 @@ from .utils import mvsecLoadRectificationMaps, mvsecRectifyEvents, mvsecCumulate
 from network.metrics import lin_to_log_depths
 
 
-SEQUENCES_FRAMES = {'indoor_flying': {'indoor_flying1': (140, 400), # first: (140, 400)  # other papers: (140, 1200)
-                                      'indoor_flying2': (160, 1580),
+SEQUENCES_FRAMES = {'indoor_flying': {'indoor_flying1': (140, 500),  # (140, 1200),  # first: (140, 400)  # other papers: (140, 1200)
+                                      'indoor_flying2': (700, 1200), #(160, 360),  # (160, 1580)
                                       'indoor_flying3': (125, 1815),
                                       'indoor_flying4': (90, 360)}
                     }
@@ -34,7 +36,7 @@ class MVSEC(Dataset):
     def get_wh():
         return 346, 260
 
-    def __init__(self, root: str, scenario: str, case: str, start_end=(0, -1), num_frames_per_depth_map=1, mirror_time=False,
+    def __init__(self, root: str, scenario: str, case: str, num_frames_per_depth_map=1, mirror_time=False,
                  take_log=True, show_sequence=False):
         print("\n#####################################")
         print("# LOADING AND PREPROCESSING DATASET #")
@@ -62,7 +64,7 @@ class MVSEC(Dataset):
         Ldepths_rect_ts = Ldepths_rect_ts[start_idx:end_idx]
         Rdepths_rect_ts = Rdepths_rect_ts[start_idx:end_idx]
 
-        # replace nan values with 255.
+        # replace nan values with a value.
         Ldepths_rect = np.nan_to_num(Ldepths_rect, nan=0)
         Rdepths_rect = np.nan_to_num(Rdepths_rect, nan=0)
 
@@ -103,13 +105,6 @@ class MVSEC(Dataset):
                                                num_frames_per_depth_map=num_frames_per_depth_map)
 
         assert xL.shape == xR.shape
-
-        # only keep a subset of the sequence
-        start_chunk_idx = start_end[0]
-        end_chunk_idx = start_end[1]
-        xL = xL[start_chunk_idx:end_chunk_idx]
-        yL = yL[start_chunk_idx:end_chunk_idx]
-        xR = xR[start_chunk_idx:end_chunk_idx]
 
         # use temporal mirroring for data augmentation and smooth training
         if mirror_time:
@@ -217,9 +212,9 @@ class shuffled_MVSEC(Dataset):
     def get_wh():
         return 346, 260
 
-    def __init__(self, root: str, scenario: str, case: str, start_end=(0, -1),
+    def __init__(self, root: str, scenario: str, case: str,
                  num_frames_per_depth_map=1, warmup_chunks=5, train_chunks=5,
-                 mirror_time=False, take_log=True, show_sequence=False):
+                 transform=None, mirror_time=False, take_log=True, show_sequence=False):
         print("\n#####################################")
         print("# LOADING AND PREPROCESSING DATASET #")
         print("#####################################\n")
@@ -229,6 +224,8 @@ class shuffled_MVSEC(Dataset):
 
         self.N_warmup = warmup_chunks
         self.N_train = train_chunks
+
+        self.transform = transform
 
         # load the data
         datafile = self.root + '{}/{}{}_data.hdf5'.format(scenario, scenario, case)
@@ -277,12 +274,6 @@ class shuffled_MVSEC(Dataset):
         xL, yL = mvsecCumulateSpikesIntoFrames(rect_Levents, Ldepths_rect, Ldepths_rect_ts,
                                                num_frames_per_depth_map=num_frames_per_depth_map)
 
-        # only keep a subset of the sequence
-        start_chunk_idx = start_end[0]
-        end_chunk_idx = start_end[1]
-        xL = xL[start_chunk_idx:end_chunk_idx]
-        yL = yL[start_chunk_idx:end_chunk_idx]
-
         # use temporal mirroring for data augmentation and smooth training
         if mirror_time:
             xL_mirr = np.flip(xL, axis=0)  # reverse the order of spike frames
@@ -315,24 +306,23 @@ class shuffled_MVSEC(Dataset):
             warmup_chunks = self.data[index - self.N_train - self.N_warmup + 1: index - self.N_train + 1]  # 4 5 6 7 8
             train_chunks = self.data[index - self.N_train + 1: index + 1]  # 9 10 11 12 13
             groundtruth = self.labels[index]  # 13
-            return init_pots, warmup_chunks, train_chunks, groundtruth
 
         elif index - self.N_train - self.N_warmup - 1 < 0:  # e.g. 2 - 5 - 5 = -8
             init_pots = self.first_labels[index]  # -8 (2)
             warmup_chunks = self.first_data[index + 1: index + 1 + self.N_warmup]  # -7 -6 -5 -4 -3 (3 4 5 6 7)
             train_chunks = self.first_data[index + 1 + self.N_warmup: index + 1 + self.N_warmup + self.N_train]  # -2 -1 0 1 2 (8 9 10 11 12)
             groundtruth = self.first_labels[index + self.N_warmup + self.N_train]  # 2 (12)
-            return init_pots, warmup_chunks, train_chunks, groundtruth
+
+        data = init_pots, warmup_chunks, train_chunks, groundtruth
+        # init_pots, label: (1, H, W)
+        # warmup_chunks: (N_warmup, nfpdm, 2, H, W)
+        # train_chunks: (N_train, nfpdm, 2, H, W)
+
+        if self.transform:
+            data = self.transform(data)
+
+        return data
 
     def show(self):
-        i = 0
-        for chunk in self.data_left:
-            i += 1
-            j = 0
-            for frame in chunk:
-                j += 1
-                f = frame[0]
-                cv2.imshow("cumulated ON event frames", f)
-                cv2.waitKey(int(1000 / (20 * self.num_frames_per_depth_map)))
-        cv2.destroyAllWindows()
+        pass
 
