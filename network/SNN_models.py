@@ -3,18 +3,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import transforms
 
 from spikingjelly.clock_driven import functional, neuron, layer, surrogate  # , accelerating
 from spikingjelly.cext import neuron as cext_neuron
 
 from .plif import ParametricLIFNode, MultiStepParametricLIFNode
-#from .blocks import cext_SEWResBlock, SEWResBlock, OneToOne, NNConvUpsampling, AttentionGate, MultiplyBy
-from .blocks import SEWResBlock, OneToOne, NNConvUpsampling, AttentionGate, MultiplyBy
-from .spiking_convLSTM import SpikingConvLSTMCell
+from .plif2 import LearnableVthPLIFNode
 
-from spikingjelly.clock_driven.neuron import BaseNode
-
+from .blocks import SEWResBlock, OneToOne, NNConvUpsampling, MultiplyBy, SpikingConvLSTMCell
 
 # Energy costs of Accumulation and Multiplication-Accumulation according to Fusion-FlowNet
 ENERGY_COST_ACC = 0.9  # pJ
@@ -40,10 +36,6 @@ class NeuromorphicNet(nn.Module):
         for m in self.modules():
             if isinstance(m, neuron.BaseNode) or isinstance(m, cext_neuron.BaseNode):
                 m.v.detach_()
-                """ test
-                if isinstance(m, ParametricLIFNode) or isinstance(m, MultiStepParametricLIFNode):
-                    m.w.detach_()
-                """
             elif isinstance(m, layer.Dropout):
                 m.mask.detach_()
 
@@ -102,93 +94,106 @@ class NeuromorphicNet(nn.Module):
         raise(NotImplementedError)
 
 
-class DepthSNN(NeuromorphicNet):
-    def __init__(self):
-        pass
-
-
-
-class SpikeFlowNetLike_cext(NeuromorphicNet):
+class Hybrid_ConvLSTM_SpikeFlowNetLike(NeuromorphicNet):
     """
-    A SpikeFlowNetLike network, but with spikingjelly's special CUDA cext acceleration.
-    """
+    A fully spiking Spike-FlowNet network, but for monocular depth estimation.
+    Its architecture is very much like a U-Net, and it outputs a single-channel depth map of the same size as the input
+    field of view.
+    Basically, we have replaced all ReLU activation functions in Spike-FlowNet by LIFNodes -> non-linearity
+    Intermediate depth maps (see paper) come out of IFNodes with an infinite threshold.
 
+    UPDATE: added a head layer before encoders, and encoders now use a 5x5 kernel like in "estimating monocular dense
+     depth from events paper", whereas "spikeflownet" paper used 3x3 kernels.
+     Even NNConvUpsampling layers use 5x5 kernels
+    """
     def __init__(self, T=None, use_plif=True, detach_reset=True, detach_input=True, tau=10., v_threshold=1.0, v_reset=0.0, v_infinite_thresh=float('inf'), final_activation=nn.Identity):
         super().__init__(T=T, use_plif=use_plif, detach_reset=detach_reset, detach_input=detach_input)
 
-        self.is_cext_model = True
+        self.is_cext_model = False
+
+        # bottom layer, preprocessing the input spike frame without downsampling
+        self.bottom = nn.Sequential(
+            nn.Conv2d(in_channels=2, out_channels=32, kernel_size=5, stride=1, padding=2, bias=False),
+            #nn.BatchNorm2d(32, affine=False),
+            #nn.BatchNorm2d(32),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
 
         # encoder layers (downsampling)
         self.conv1 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(in_channels=2, out_channels=64, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(64),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(64, affine=False),
+            #nn.BatchNorm2d(64),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv2 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(128),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(128, affine=False),
+            #nn.BatchNorm2d(128),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv3 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(256),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(256, affine=False),
+            #nn.BatchNorm2d(256),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv4 = nn.Sequential(
-            layer.SeqToANNContainer(
-                nn.Conv2d(in_channels=256, out_channels=512, kernel_size=3, stride=2, padding=(3 - 1) // 2, bias=False),
-                nn.BatchNorm2d(512),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            nn.Conv2d(in_channels=256, out_channels=512, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(512, affine=False),
+            #nn.BatchNorm2d(512),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
+
+        self.convlstm1 = SpikingConvLSTMCell(input_channels=64, hidden_channels=64, kernel_size=3, bias=False)
+        self.convlstm2 = SpikingConvLSTMCell(input_channels=128, hidden_channels=128, kernel_size=3, bias=False)
+        self.convlstm3 = SpikingConvLSTMCell(input_channels=256, hidden_channels=256, kernel_size=3, bias=False)
+        self.convlstm4 = SpikingConvLSTMCell(input_channels=512, hidden_channels=512, kernel_size=3, bias=False)
 
         # residual layers
         self.bottleneck = nn.Sequential(
-            cext_SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
-            cext_SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
+            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
+            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
         )
 
         # decoder layers (upsampling)
         self.deconv4 = nn.Sequential(
-            layer.SeqToANNContainer(
-                NNConvUpsampling(in_channels=512, out_channels=256, kernel_size=3, up_size=(33, 44)),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            NNConvUpsampling(in_channels=512, out_channels=256, kernel_size=5, up_size=(33, 44)),
+            nn.LeakyReLU(0.1),
+            nn.BatchNorm2d(256),
         )
         self.deconv3 = nn.Sequential(
-            layer.SeqToANNContainer(
-                NNConvUpsampling(in_channels=256, out_channels=128, kernel_size=3, up_size=(65, 87)),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            NNConvUpsampling(in_channels=256, out_channels=128, kernel_size=5, up_size=(65, 87)),
+            nn.LeakyReLU(0.1),
+            nn.BatchNorm2d(128),
         )
         self.deconv2 = nn.Sequential(
-            layer.SeqToANNContainer(
-                NNConvUpsampling(in_channels=128, out_channels=64, kernel_size=3, up_size=(130, 173)),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            NNConvUpsampling(in_channels=128, out_channels=64, kernel_size=5, up_size=(130, 173)),
+            nn.LeakyReLU(0.1),
+            nn.BatchNorm2d(64),
         )
         self.deconv1 = nn.Sequential(
-            layer.SeqToANNContainer(
-                NNConvUpsampling(in_channels=64, out_channels=4, kernel_size=3, up_size=(260, 346)),
-            ),
-            MultiStepParametricLIFNode(init_tau=2.0, detach_input=True, detach_reset=True) if self.use_plif else cext_neuron.MultiStepLIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function='ATan', detach_reset=True),
+            NNConvUpsampling(in_channels=64, out_channels=32, kernel_size=5, up_size=(260, 346)),
+            nn.LeakyReLU(0.1),
+            nn.BatchNorm2d(32),
+        )
+
+        # top convolutional layer, processing the output of the decoder and the output of the bottom layer
+        self.top = nn.Sequential(
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.LeakyReLU(0.1),
+            nn.BatchNorm2d(32),
         )
 
         # these layers output depth maps at different scales, where depth is represented by the potential of IF neurons
         # that do not fire ("I-neurons"), i.e., with an infinite threshold.
         self.predict_depth = nn.Sequential(
-            layer.SeqToANNContainer(
-                # nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1, bias=False),
-                # nn.BatchNorm2d(1),
-                OneToOne((4, 260, 346)),
-            ),
-            cext_neuron.MultiStepIFNode(v_threshold=v_infinite_thresh, v_reset=v_reset, surrogate_function='ATan'),
+            nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1, stride=1, padding=0, bias=False)
         )
 
         self.final_activation = final_activation
@@ -196,35 +201,231 @@ class SpikeFlowNetLike_cext(NeuromorphicNet):
     def forward(self, x):
         # x must be of shape [batch_size, num_frames_per_depth_map, 2 (polarities), W, H]
 
-        # x must be of shape [T, N, C, W, H], so we change it a bit: [N, T, C, W, H] -> [T, N, C, W, H]
-        x = x.permute(1, 0, 2, 3, 4)
+        for t in range(x.shape[1]):
 
-        # then just forward through the network
+            frame = x[:, t, :, :, :]
 
-        # pass through encoder layers
-        out_conv1 = self.conv1(x)
-        out_conv2 = self.conv2(out_conv1)
-        out_conv3 = self.conv3(out_conv2)
-        out_conv4 = self.conv4(out_conv3)
+            # data is fed in through the bottom layer
+            out_bottom = self.bottom(frame)
 
-        # pass through residual blocks
-        out_rconv = self.bottleneck(out_conv4)
+            # pass through stateful encoder layers: strided convolutions + convlstms
+            out_conv1 = self.conv1(out_bottom)
+            out_convlstm1 = self.convlstm1(out_conv1)
+            out_conv2 = self.conv2(out_convlstm1)
+            out_convlstm2 = self.convlstm2(out_conv2)
+            out_conv3 = self.conv3(out_convlstm2)
+            out_convlstm3 = self.convlstm3(out_conv3)
+            out_conv4 = self.conv4(out_convlstm3)
+            out_convlstm4 = self.convlstm4(out_conv4)
 
-        # gradually upsample while concatenating and passing through skip connections
+            # pass through residual blocks
+            out_rconv = self.bottleneck(out_convlstm4)
+
+        # latent representation is then decoded by stateless upsampling layers
         out_deconv4 = self.deconv4(out_rconv)
-        out_add4 = self.crop_like(out_deconv4, out_conv3) + out_conv3
+        out_add4 = out_deconv4 + out_convlstm3
 
         out_deconv3 = self.deconv3(out_add4)
-        out_add3 = self.crop_like(out_deconv3, out_conv2) + out_conv2
+        out_add3 = out_deconv3 + out_convlstm2
 
         out_deconv2 = self.deconv2(out_add3)
-        out_add2 = self.crop_like(out_deconv2, out_conv1) + out_conv1
+        out_add2 = out_deconv2 + out_convlstm1
 
         out_deconv1 = self.deconv1(out_add2)
+        out_add1 = out_deconv1 + out_bottom
 
-        out_depth1 = self.predict_depth(out_deconv1)
+        # final processing
+        out_top = self.top(out_add1)
 
+        return self.predict_depth(out_top)
+
+    def set_init_depths_potentials(self, depth_prior):
+        self.predict_depth[-1].v = depth_prior
+
+    def reset_convLSTM_states(self):
+        for m in self.modules():
+            if isinstance(m, SpikingConvLSTMCell):
+                m.set_hc(None, None)
+
+    def detach(self):
+        for m in self.modules():
+            if isinstance(m, neuron.BaseNode) or isinstance(m, cext_neuron.BaseNode):
+                m.v.detach_()
+            elif isinstance(m, layer.Dropout):
+                m.mask.detach_()
+            elif isinstance(m, SpikingConvLSTMCell):
+                m.h.detach()
+                m.c.detach()
+
+
+class ConvLSTM_SpikeFlowNetLike(NeuromorphicNet):
+    """
+    A fully spiking Spike-FlowNet network, but for monocular depth estimation.
+    Its architecture is very much like a U-Net, and it outputs a single-channel depth map of the same size as the input
+    field of view.
+    Basically, we have replaced all ReLU activation functions in Spike-FlowNet by LIFNodes -> non-linearity
+    Intermediate depth maps (see paper) come out of IFNodes with an infinite threshold.
+
+    UPDATE: added a head layer before encoders, and encoders now use a 5x5 kernel like in "estimating monocular dense
+     depth from events paper", whereas "spikeflownet" paper used 3x3 kernels.
+     Even NNConvUpsampling layers use 5x5 kernels
+    """
+    def __init__(self, T=None, use_plif=True, detach_reset=True, detach_input=True, tau=10., v_threshold=1.0, v_reset=0.0, v_infinite_thresh=float('inf'), final_activation=nn.Identity):
+        super().__init__(T=T, use_plif=use_plif, detach_reset=detach_reset, detach_input=detach_input)
+
+        self.is_cext_model = False
+
+        # bottom layer, preprocessing the input spike frame without downsampling
+        self.bottom = nn.Sequential(
+            nn.Conv2d(in_channels=2, out_channels=32, kernel_size=5, stride=1, padding=2, bias=False),
+            #nn.BatchNorm2d(32, affine=False),
+            #nn.BatchNorm2d(32),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+
+        # encoder layers (downsampling)
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(64, affine=False),
+            #nn.BatchNorm2d(64),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(128, affine=False),
+            #nn.BatchNorm2d(128),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(256, affine=False),
+            #nn.BatchNorm2d(256),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(in_channels=256, out_channels=512, kernel_size=5, stride=2, padding=2, bias=False),
+            #nn.BatchNorm2d(512, affine=False),
+            #nn.BatchNorm2d(512),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+
+        self.convlstm1 = SpikingConvLSTMCell(input_channels=64, hidden_channels=64, kernel_size=3, bias=False)
+        self.convlstm2 = SpikingConvLSTMCell(input_channels=128, hidden_channels=128, kernel_size=3, bias=False)
+        self.convlstm3 = SpikingConvLSTMCell(input_channels=256, hidden_channels=256, kernel_size=3, bias=False)
+        self.convlstm4 = SpikingConvLSTMCell(input_channels=512, hidden_channels=512, kernel_size=3, bias=False)
+
+        # residual layers
+        self.bottleneck = nn.Sequential(
+            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
+            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif),
+        )
+
+        # decoder layers (upsampling)
+        self.deconv4 = nn.Sequential(
+            NNConvUpsampling(in_channels=512, out_channels=256, kernel_size=5, up_size=(33, 44)),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.deconv3 = nn.Sequential(
+            NNConvUpsampling(in_channels=256, out_channels=128, kernel_size=5, up_size=(65, 87)),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.deconv2 = nn.Sequential(
+            NNConvUpsampling(in_channels=128, out_channels=64, kernel_size=5, up_size=(130, 173)),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+        self.deconv1 = nn.Sequential(
+            NNConvUpsampling(in_channels=64, out_channels=32, kernel_size=5, up_size=(260, 346)),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+
+        # top convolutional layer, processing the output of the decoder and the output of the bottom layer
+        self.top = nn.Sequential(
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=1, stride=1, padding=0, bias=False),
+            #nn.BatchNorm2d(32, affine=False),
+            #nn.BatchNorm2d(32),
+            MultiplyBy(),
+            ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
+        )
+
+        # these layers output depth maps at different scales, where depth is represented by the potential of IF neurons
+        # that do not fire ("I-neurons"), i.e., with an infinite threshold.
+        self.predict_depth = nn.Sequential(
+            OneToOne((32, 260, 346)),
+            # SpikingInceptionModule(in_channels=32, out_channels=1),
+            neuron.IFNode(v_threshold=v_infinite_thresh, v_reset=v_reset, surrogate_function=surrogate.ATan()),
+        )
+
+        self.final_activation = final_activation
+
+    def forward(self, x):
+        # x must be of shape [batch_size, num_frames_per_depth_map, 2 (polarities), W, H]
+
+        for t in range(x.shape[1]):
+
+            frame = x[:, t, :, :, :]
+
+            # data is fed in through the bottom layer
+            out_bottom = self.bottom(frame)
+
+            # pass through encoder layers: strided convolutions + convlstms
+            out_conv1 = self.conv1(out_bottom)
+            out_convlstm1 = self.convlstm1(out_conv1)
+            out_conv2 = self.conv2(out_convlstm1)
+            out_convlstm2 = self.convlstm2(out_conv2)
+            out_conv3 = self.conv3(out_convlstm2)
+            out_convlstm3 = self.convlstm3(out_conv3)
+            out_conv4 = self.conv4(out_convlstm3)
+            out_convlstm4 = self.convlstm4(out_conv4)
+
+            # pass through residual blocks
+            out_rconv = self.bottleneck(out_convlstm4)
+
+            # gradually upsample while concatenating and passing through skip connections
+            out_deconv4 = self.deconv4(out_rconv)
+            out_add4 = out_deconv4 + out_convlstm3
+
+            out_deconv3 = self.deconv3(out_add4)
+            out_add3 = out_deconv3 + out_convlstm2
+
+            out_deconv2 = self.deconv2(out_add3)
+            out_add2 = out_deconv2 + out_convlstm1
+
+            out_deconv1 = self.deconv1(out_add2)
+            out_add1 = out_deconv1 + out_bottom
+
+            # final processing and update of output depth potentials
+            out_top = self.top(out_add1)
+            self.predict_depth(out_top)
+
+        # the membrane potentials of the output IF neuron carry the depth prediction
         return self.final_activation(self.predict_depth[-1].v)
+
+    def set_init_depths_potentials(self, depth_prior):
+        self.predict_depth[-1].v = depth_prior
+
+    def reset_convLSTM_states(self):
+        for m in self.modules():
+            if isinstance(m, SpikingConvLSTMCell):
+                m.set_hc(None, None)
+
+    def detach(self):
+        for m in self.modules():
+            if isinstance(m, neuron.BaseNode) or isinstance(m, cext_neuron.BaseNode):
+                m.v.detach_()
+            elif isinstance(m, layer.Dropout):
+                m.mask.detach_()
+            elif isinstance(m, SpikingConvLSTMCell):
+                m.h.detach()
+                m.c.detach()
 
 
 class SpikeFlowNetLike(NeuromorphicNet):
@@ -246,7 +447,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
 
         # bottom layer, preprocessing the input spike frame without downsampling
         self.bottom = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=2, out_channels=32, kernel_size=5, stride=1, padding=2, bias=False),
             #nn.BatchNorm2d(32, affine=False),
             #nn.BatchNorm2d(32),
@@ -256,7 +456,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
 
         # encoder layers (downsampling)
         self.conv1 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, stride=2, padding=2, bias=False),
             #nn.BatchNorm2d(64, affine=False),
             #nn.BatchNorm2d(64),
@@ -264,7 +463,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv2 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=2, padding=2, bias=False),
             #nn.BatchNorm2d(128, affine=False),
             #nn.BatchNorm2d(128),
@@ -272,7 +470,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv3 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=128, out_channels=256, kernel_size=5, stride=2, padding=2, bias=False),
             #nn.BatchNorm2d(256, affine=False),
             #nn.BatchNorm2d(256),
@@ -280,7 +477,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.conv4 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=256, out_channels=512, kernel_size=5, stride=2, padding=2, bias=False),
             #nn.BatchNorm2d(512, affine=False),
             #nn.BatchNorm2d(512),
@@ -296,17 +492,14 @@ class SpikeFlowNetLike(NeuromorphicNet):
 
         # decoder layers (upsampling)
         self.deconv4 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             NNConvUpsampling(in_channels=512, out_channels=256, kernel_size=5, up_size=(33, 44)),
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.deconv3 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             NNConvUpsampling(in_channels=256, out_channels=128, kernel_size=5, up_size=(65, 87)),
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
         self.deconv2 = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             NNConvUpsampling(in_channels=128, out_channels=64, kernel_size=5, up_size=(130, 173)),
             ParametricLIFNode(init_tau=tau, v_threshold=v_threshold, v_reset=v_reset, detach_input=True, detach_reset=True) if use_plif else neuron.LIFNode(tau=tau, v_threshold=v_threshold, v_reset=v_reset, surrogate_function=surrogate.ATan(), detach_reset=True),
         )
@@ -317,7 +510,6 @@ class SpikeFlowNetLike(NeuromorphicNet):
 
         # top convolutional layer, processing the output of the decoder and the output of the bottom layer
         self.top = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             nn.Conv2d(in_channels=32, out_channels=32, kernel_size=1, stride=1, padding=0, bias=False),
             #nn.BatchNorm2d(32, affine=False),
             #nn.BatchNorm2d(32),
@@ -328,9 +520,8 @@ class SpikeFlowNetLike(NeuromorphicNet):
         # these layers output depth maps at different scales, where depth is represented by the potential of IF neurons
         # that do not fire ("I-neurons"), i.e., with an infinite threshold.
         self.predict_depth = nn.Sequential(
-            #layer.Dropout2d(p=0.2),
             OneToOne((32, 260, 346)),
-            # SpikingInceptionModule(in_channels=32, out_channels=1),
+            MultiplyBy(),
             neuron.IFNode(v_threshold=v_infinite_thresh, v_reset=v_reset, surrogate_function=surrogate.ATan()),
         )
 
