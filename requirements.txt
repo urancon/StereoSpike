@@ -1,6 +1,7 @@
 # minimal requirements
 torch
 opencv-python
+scikit-image
 h5py
 tqdm
 
