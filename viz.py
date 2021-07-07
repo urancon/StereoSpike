@@ -1,3 +1,4 @@
+import os
 import io
 import cv2
 import numpy as np
@@ -34,6 +35,7 @@ def show_learning(fig, chunk, out_depth_potentials, label, title):
     :param chunk:
     :param out_depth_potentials: a tensor of shape (batchsize, 1, 260, 346)
     :param label:  a tensor of shape (batchsize, 1, 260, 346)
+    :param title
     :return:
     """
     plt.title(title)
@@ -90,3 +92,32 @@ def show_learning(fig, chunk, out_depth_potentials, label, title):
     plt.clf()
 
     return data
+
+
+def make_vid_from_pngs(png_folder, res_tuple, fps, outfile):
+
+    import re
+
+    def atoi(text):
+        return int(text) if text.isdigit() else text
+        elsetext
+
+    def natural_keys(text):
+        return [atoi(c) for c in re.split('(\d+)', text)]
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(outfile, fourcc, fps, res_tuple)
+
+    i = 0
+    sorted_filenames = os.listdir(png_folder)
+    sorted_filenames.sort(key=natural_keys)  # sort png filenames in numerical order
+    for file in sorted_filenames:
+        i += 1
+        frame = cv2.imread(png_folder + file)
+        out.write(frame)
+        cv2.waitKey(int(1000 / fps))
+
+    out.release()
+    print("created video file " + outfile)
+    print()
+
