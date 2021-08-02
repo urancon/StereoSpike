@@ -45,21 +45,60 @@ Manually download *indoor_flying* and *outdoor_day* sequences from [MVSEC websit
 **under hdf5 format**. Extract and order them so that they follow this architecture:
 
 ```
-dataset/
-├── outdoor_day/
-│   ├── outdoor_day1_data.hdf5
-│   ├── outdoor_day1_gt.hdf5
-│   ├── ...
-│   └── outdoor_day2_calib/
-│       ├── camchain-imucam-outdoor_day.yaml
-│       ├── outdoor_day_left_x_map.txt
-│       └── ...
-└── ...
+datasets/
+    ├── MVSEC/
+    │      ├── data/
+    │      │    ├── indoor_flying/
+    │      │    │   ├── indoor_flying1_data.hdf5
+    │      │    │   ├── indoor_flying1_gt.hdf5
+    │      │    │   ├── ...
+    │      │    │   └── indoor_flying_calib/
+    │      │    │       ├── camchain-imucam-indoor_flying.yaml
+    │      │    │       ├── indoor_flying_left_x_map.txt
+    │      │    │       └── ...
+    │      │    └── ...
+    │      │
+    │      ├── __init__.py
+    │      ├── mvsec_dataset.py 
+    │      └── utils.py
+    └── ...  
 ```
+
+You are now ready to run some scripts.
+
+
+## Training and evaluation
 
 You can now launch a training by ```python3 train.py```. Once the training is done, you can use the trained model for inference
 with ```python3 inference.py```.
 
 
-## General
+## Pre-trained models
 
+You will be able to find a few pre-trained models at the following address:
+
+The following table summarizes their features and performances:
+
+| Model name        | Type           | Modality    | Eval Mean Depth Error (cm) | Energy cost (mJ) |
+| ----------------- |:--------------:|:-----------:|:--------------------------:| ----------------:|
+|                   | SNN            | Binocular   |                            |                  |
+|                   | SNN            | Monocular   |                            |                  |
+|                   | HNN            | Binocular   |                            |                  |
+|                   | HNN            | Monocular   |                            |                  |
+|                   | ANN            | Binocular   |                            |                  |
+|                   | ANN            | Monocular   |                            |                  |
+
+
+## Citation
+
+We hope that you find our code and article useful for your work. If that is the case, please cite us !
+
+```text
+@Article{D-SNN2021,
+  author        = {},
+  title         = {},
+  journal       = {},
+  url           = {},
+  year          = 2021
+}
+```
