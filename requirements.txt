@@ -1,5 +1,6 @@
 # minimal requirements
 torch
+tensorboard
 opencv-python
 scikit-image
 h5py

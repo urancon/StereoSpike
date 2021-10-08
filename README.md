@@ -1,7 +1,12 @@
-# Depth-SNN
+# StereoSpike: Depth Learning with a Spiking Neural Network
 *Depth estimation with Spiking Neural Networks (SNN) on Dynamic Vision Sensor (DVS) data in a binocular setup.*
 
-In progress - March-August 2021.
+Started March 2021 - under construction
+
+## Arxiv Paper
+
+This repository is associated with the Arxiv paper *[StereoSpike: Depth Learning with a Spiking Neural Network](https://arxiv.org/abs/2109.13751)*.
+It will essentially provide training and evaluation codes we used to develop our model. 
 
 
 ## Overview
@@ -79,14 +84,12 @@ You will be able to find a few pre-trained models at the following address:
 
 The following table summarizes their features and performances:
 
-| Model name        | Type           | Modality    | Eval Mean Depth Error (cm) | Energy cost (mJ) |
-| ----------------- |:--------------:|:-----------:|:--------------------------:| ----------------:|
-|                   | SNN            | Binocular   |                            |                  |
-|                   | SNN            | Monocular   |                            |                  |
-|                   | HNN            | Binocular   |                            |                  |
-|                   | HNN            | Monocular   |                            |                  |
-|                   | ANN            | Binocular   |                            |                  |
-|                   | ANN            | Monocular   |                            |                  |
+| Model name        | Type           | Modality    | Eval Mean Depth Error (cm) |
+| ----------------- |:--------------:|:-----------:|:--------------------------:|
+|  *to be added*                 | SNN            | Binocular   |                            |
+|  *to be added*                 | SNN            | Monocular   |                            |
+|  *to be added*                 | ANN            | Binocular   |                            |
+
 
 
 ## Citation
@@ -94,11 +97,12 @@ The following table summarizes their features and performances:
 We hope that you find our code and article useful for your work. If that is the case, please cite us !
 
 ```text
-@Article{D-SNN2021,
-  author        = {},
-  title         = {},
-  journal       = {},
-  url           = {},
-  year          = 2021
+@misc{rançon2021stereospike,
+      title={StereoSpike: Depth Learning with a Spiking Neural Network}, 
+      author={Ulysse Rançon and Javier Cuadrado-Anibarro and Benoit R. Cottereau and Timothée Masquelier},
+      year={2021},
+      eprint={2109.13751},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
 }
 ```
