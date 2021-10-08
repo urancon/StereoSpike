@@ -3,6 +3,9 @@
 
 Started March 2021 - under construction
 
+![demo-gif](./sources/demo.gif)
+
+
 ## Arxiv Paper
 
 This repository is associated with the Arxiv paper *[StereoSpike: Depth Learning with a Spiking Neural Network](https://arxiv.org/abs/2109.13751)*.
