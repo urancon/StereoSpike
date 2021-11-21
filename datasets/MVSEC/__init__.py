@@ -1,2 +1,1 @@
-from .mvsec_dataset import MVSEC, shuffled_MVSEC
-
+from .mvsec_dataset import load_MVSEC

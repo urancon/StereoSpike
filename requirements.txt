@@ -1,13 +1,16 @@
 # minimal requirements
 torch
+spikingjelly
 tensorboard
 opencv-python
 scikit-image
 h5py
 tqdm
 
-
 # required by spikingjelly, but not necessary to us
 loris
 torchaudio
 ninja
+
+# others
+matplotlib

@@ -36,9 +36,7 @@ def depth_to_disparity(depth_maps):
 
     Original code available at https://github.com/tlkvstepan/event_stereo_ICCV2019
     """
-    disparity_maps = np.round(DISPARITY_MULTIPLIER *
-                              np.abs(FOCAL_LENGTH_X_BASELINE['indoor_flying']) /
-                              (depth_maps + 1e-15))
+    disparity_maps = DISPARITY_MULTIPLIER * FOCAL_LENGTH_X_BASELINE['indoor_flying'] / (depth_maps + 1e-15)
     return disparity_maps
 
 
@@ -95,4 +93,3 @@ def MeanDepthError(predicted, groundtruth):
     MDE = torch.sum(torch.abs(res[mask])) / n
 
     return MDE
-
