@@ -69,7 +69,7 @@ def lin_to_log_depths(depths_rect_lin, Dmax=10, alpha=6.):
     """
     depths_rect_log = np.clip(depths_rect_lin, 0.0, Dmax)  # clip to maximum depth
     depths_rect_log = depths_rect_log / Dmax  # normalize
-    depths_rect_log = 1.0 + np.log(depths_rect_log) / alpha  # take logarithm  # TODO changer alpha tq. lin_depth = Dmin --> log_depth = 0 |
+    depths_rect_log = 1.0 + np.log(depths_rect_log) / alpha  # take logarithm
     depths_rect_log = depths_rect_log.clip(0, 1.0)  # clip between 0 and 1
 
     return depths_rect_log

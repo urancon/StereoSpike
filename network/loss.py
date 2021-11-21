@@ -114,8 +114,6 @@ class Total_Loss(nn.Module):
 
     Spike penalization can be balanced with beta weight parameter. Increasing it will reduce spiking activity and
     accuracy.
-
-    # TODO: describe parameters
     """
 
     def __init__(self, alpha=0.5, scale_weights=(1., 1., 1., 1.), penalize_spikes=False, beta=1.):

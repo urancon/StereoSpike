@@ -80,16 +80,23 @@ class MVSEC_sequence(Dataset):
     Raw events are initially represented in Adress Event Representation (AER) format, that is, as a list of tuples
     (X, Y, T, P).
     An MVSEC sequence (e.g. 'indoor_flying3') is cut into frames on which we accumulate spikes occurring during a
-    certain time interval dt.
+    certain time interval dt to constitute a spike frame.
     In our paper, dt = 50 ms, which happens to correspond to the frequency of ground truth depth maps provided by the
     LIDAR.
 
-    Essentially, the sequence is translated in 2 input tensors (left/right) of shape [# of frames, 2 (ON/OFF), W, H].
-    Corresponding ground-truth depth maps are contained in a tensor of shape [# of frames, W, H].
+    One chunk corresponds to a duration of 50 ms, containing 'num_frames_per_depth_map' frames for one single label.
+    Essentially, the sequence is translated in 2 input tensors (left/right) of shape [# chunks, # of frames, 2 (ON/OFF), W, H].
+    Corresponding ground-truth depth maps are contained in a tensor of shape [# of chunks, W, H].
     Dataloaders finally add the batch dimension.
 
-    TODO: explain about warmup and train chunks
-    TODO: explain other args
+    Warmup chunks are chronologically followed by train chunks. Warmup chunks can be used for training recurrent models;
+    the idea is to deactivate automatic differentiation and perform inference on warmup chunks before train chunks, so
+    that hidden states within the model reach a steady state. Then activate autodiff back before forward passing train
+    chunks.
+
+    Therefore, in our paper, we used 1 train chunk of 1 frame (of 50 ms) per depth ground truth.
+
+    'transform' can be used for data augmentation techniques, whose methods we provide in this data_augmentation.py file
     """
 
     @staticmethod

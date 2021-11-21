@@ -3,13 +3,15 @@
 
 Started March 2021 - under construction
 
+last update Nov. 21st, 2021
+
 ![demo-gif](./sources/demo.gif)
 
 
 ## Arxiv Paper
 
 This repository is associated with the Arxiv paper *[StereoSpike: Depth Learning with a Spiking Neural Network](https://arxiv.org/abs/2109.13751)*.
-It will essentially provide training and evaluation codes we used to develop our model. 
+It essentially provides training and evaluation codes we used to develop our model. 
 
 
 ## Overview
@@ -44,12 +46,16 @@ powerful CUDA acceleration (up to ~300 faster than naive Pytorch).
 
 ## Installation
 
-First install Spikingelly from source by following the instruction on their official [Github repo](https://github.com/fangwei123456/spikingjelly).
-**Caution**: do not use PyPI / pip installation if you want to use special CUDA acceleration !
+First, make sure to create a new virtual python environment and activate it. With [conda](https://www.anaconda.com/), 
+you can do for instance:
+```shell
+conda create -n stereoSNN python=3.6
+conda activate stereoSNN
+```
 
-Then install other dependencies with ```pip3 install -r requirements.txt```.
+Then install dependencies to run experiments with ```pip3 install -r requirements.txt```.
 
-Manually download *indoor_flying* and *outdoor_day* sequences from [MVSEC website](https://daniilidis-group.github.io/mvsec/) 
+Finally, manually download *indoor_flying* sequences from [MVSEC website](https://daniilidis-group.github.io/mvsec/) 
 **under hdf5 format**. Extract and order them so that they follow this architecture:
 
 ```
@@ -72,13 +78,19 @@ datasets/
     └── ...  
 ```
 
-You are now ready to run some scripts.
+You are now ready to use the code on this repo !
 
 
 ## Training and evaluation
 
-You can now launch a training by ```python3 train.py```. Once the training is done, you can use the trained model for inference
-with ```python3 inference.py```.
+There are 3 main scripts that you can use to replicate our results:
+* ```train.py``` - train a model, logs and models are saved in *results/checkpoints/* folder
+* ```test.py``` - evaluate a model on its test set, get its Mean Depth Error (MDE)
+* ```calculate_firing rates.py``` - model performs inference on test set, densities of all intermediate tensors are averaged
+across all inferences
+
+We let the default hyper-parameters that we used during our experiments, but feel free to edit them and adapt them to your
+needs !
 
 
 ## Pre-trained models
