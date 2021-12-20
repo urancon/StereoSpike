@@ -17,7 +17,7 @@ from datasets.data_augmentation import ToTensor, RandomHorizontalFlip, RandomVer
     RandomEventDrop
 
 from network.SNN_models import StereoSpike, fromZero_feedforward_multiscale_tempo_Matt_SpikeFlowNetLike
-from network.ANN_models import SteroSpike_equivalentANN
+from network.ANN_models import StereoSpike_equivalentANN
 
 from network.metrics import MeanDepthError, log_to_lin_depths, disparity_to_depth
 from network.loss import Total_Loss
@@ -116,8 +116,8 @@ test_data_loader = torch.utils.data.DataLoader(dataset=test_set,
 ###########
 
 net = StereoSpike(surrogate_function=surrogate.ATan(), detach_reset=True, v_threshold=1.0, v_reset=0.).to(device)
-# net = SteroSpike_equivalentANN(activation_function=nn.Sigmoid()).to(device)
-
+# net = StereoSpike_equivalentANN(activation_function=nn.Sigmoid()).to(device)
+# net = fromZero_feedforward_multiscale_tempo_Matt_SpikeFlowNetLike(tau=3., v_threshold=1.0, v_reset=0.0, use_plif=True, multiply_factor=10.).to(device)
 
 ################
 # OPTIMIZATION #
@@ -193,7 +193,7 @@ for epoch in range(n_epochs):
         init_pots = init_pots.to(device)
         warmup_chunks_left = warmup_chunks_left.to(device, dtype=torch.float)
         warmup_chunks_right = warmup_chunks_right.to(device, dtype=torch.float)
-        train_chunks_left = train_chunks_right.to(device, dtype=torch.float)
+        train_chunks_left = train_chunks_left.to(device, dtype=torch.float)
         train_chunks_right = train_chunks_right.to(device, dtype=torch.float)
         label = label.to(device)
 
@@ -282,7 +282,7 @@ for epoch in range(n_epochs):
             init_pots = init_pots.to(device)
             warmup_chunks_left = warmup_chunks_left.to(device, dtype=torch.float)
             warmup_chunks_right = warmup_chunks_right.to(device, dtype=torch.float)
-            test_chunks_left = test_chunks_right.to(device, dtype=torch.float)
+            test_chunks_left = test_chunks_left.to(device, dtype=torch.float)
             test_chunks_right = test_chunks_right.to(device, dtype=torch.float)
             label = label.to(device)
 

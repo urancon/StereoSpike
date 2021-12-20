@@ -25,7 +25,7 @@ class AnalogNet(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-class SteroSpike_equivalentANN(AnalogNet):
+class StereoSpike_equivalentANN(AnalogNet):
     """
     An Analog Neural Network (ANN) with the exact same architecture as StereoSpike.
     Uses biases in convolution layers, batch normalization, and classical activation functions such as Sigmoid.
