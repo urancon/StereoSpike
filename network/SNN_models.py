@@ -437,13 +437,10 @@ class fromZero_feedforward_multiscale_tempo_Matt_SpikeFlowNetLike(NeuromorphicNe
 
 class fromZero_feedforward_multiscale_tempo_monocular_SpikeFlowNetLike(NeuromorphicNet):
     """
-    model that makes intermediate predictions at different times thanks to a pool of neuron that is common.
-
-    IT IS FULLY SPIKING AND HAS THE BEST MDE WE'VE SEEN SO FAR !!!
-
+    This model only takes the data from 1 camera, hence only two channels in the initial 'bottom' convolution.
     """
     def __init__(self, use_plif=False, detach_reset=True, tau=10., v_threshold=1.0, v_reset=0.0, final_activation=nn.Identity, multiply_factor=1.):
-        super().__init__(use_plif=use_plif, detach_reset=detach_reset)
+        super().__init__(detach_reset=detach_reset)
 
         self.is_cext_model = False
 
@@ -478,8 +475,8 @@ class fromZero_feedforward_multiscale_tempo_monocular_SpikeFlowNetLike(Neuromorp
 
         # residual layers
         self.bottleneck = nn.Sequential(
-            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif, multiply_factor=multiply_factor),
-            SEWResBlock(512, tau=tau, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', use_plif=use_plif, multiply_factor=multiply_factor),
+            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor, use_plif=True, tau=tau),
+            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor, use_plif=True, tau=tau),
         )
 
         # decoder layers (upsampling)
