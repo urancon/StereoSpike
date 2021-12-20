@@ -9,7 +9,7 @@ from .blocks import SEWResBlock, NNConvUpsampling, MultiplyBy
 
 
 class NeuromorphicNet(nn.Module):
-    def __init__(self, surrogate_function=surrogate.ATan(), detach_reset=True, v_threshold=1.0, v_reset=0.0):
+    def __init__(self, surrogate_function=surrogate.Sigmoid(), detach_reset=True, v_threshold=1.0, v_reset=0.0):
         super().__init__()
         self.surrogate_fct = surrogate_function
         self.detach_rst = detach_reset
@@ -68,7 +68,7 @@ class StereoSpike(NeuromorphicNet):
     - predict_depth layers do have biases, but it is equivalent to remove them and reset output I-neurons to the sum
            of all 4 biases, instead of 0.
     """
-    def __init__(self, surrogate_function=surrogate.ATan(), detach_reset=True, v_threshold=1.0, v_reset=0.0, multiply_factor=1.):
+    def __init__(self, surrogate_function=surrogate.Sigmoid(), detach_reset=True, v_threshold=1.0, v_reset=0.0, multiply_factor=1.):
         super().__init__(surrogate_function=surrogate_function, detach_reset=detach_reset)
 
         # bottom layer, preprocessing the input spike frame without downsampling
@@ -149,7 +149,7 @@ class StereoSpike(NeuromorphicNet):
 
         self.Ineurons = neuron.IFNode(v_threshold=float('inf'), v_reset=0.0, surrogate_function=self.surrogate_fct)
 
-    def forward(self, x, save_spike_tensors=False):
+    def forward(self, x):
 
         # x must be of shape [batch_size, num_frames_per_depth_map, 4 (2 cameras - 2 polarities), W, H]
         frame = x[:, 0, :, :, :]
@@ -250,7 +250,9 @@ class StereoSpike(NeuromorphicNet):
 
 class fromZero_feedforward_multiscale_tempo_Matt_SpikeFlowNetLike(NeuromorphicNet):
     """
-    TODO: DESCRIPTION
+    Baseline model that we used for our experiments, and whose results are shown in the paper. The difference is the
+    use of PLIF neurons instead of IF.
+    In our experiments, we used an initial value of tau=3.0 and a multiply_factor of 10.0
     """
     def __init__(self, use_plif=False, detach_reset=True, tau=10., v_threshold=1.0, v_reset=0.0, multiply_factor=1.):
         super().__init__(detach_reset=detach_reset)
@@ -288,8 +290,8 @@ class fromZero_feedforward_multiscale_tempo_Matt_SpikeFlowNetLike(NeuromorphicNe
 
         # residual layers
         self.bottleneck = nn.Sequential(
-            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor),
-            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor),
+            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor, use_plif=True, tau=tau),
+            SEWResBlock(512, v_threshold=v_threshold, v_reset=v_reset, connect_function='ADD', multiply_factor=multiply_factor, use_plif=True, tau=tau),
         )
 
         # decoder layers (upsampling)
