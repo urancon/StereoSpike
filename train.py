@@ -57,15 +57,15 @@ set_random_seed(2021)
 # GENERAL PARAMETERS #
 ######################
 
-nfpdm = 1  # (!) don't choose it too big because of memory limitations (!)
-N_inference = 1
-N_warmup = 1
-batchsize = 1
-learned_metric = 'LIN'
+nfpdm = 1              # number of frames per depth map (1 label every 50 ms)
+N_inference = 1        # number of chunks for training/testing (1 chunk = 50 ms = nfpdm frames)
+N_warmup = 1           # number of chunks for warmup (if you want to use a stateful model)
+batchsize = 1		
+learned_metric = 'LIN' # learn metric depth ('LIN'), normalized log depth ('LOG') or disparity ('DISP')
 learning_rate = 0.0002
 weight_decay = 0.0
 n_epochs = 70
-show = False
+show = False           # display network's predictions during training / validation
 
 
 ###########################
@@ -90,7 +90,7 @@ tsfm = transforms.Compose([
 ])
 
 train_set, val_set, test_set = load_MVSEC('./datasets/MVSEC/data/', scenario='indoor_flying', split='1',
-                                          num_frames_per_depth_map=1, warmup_chunks=1, train_chunks=1,
+                                          num_frames_per_depth_map=nfpdm, warmup_chunks=1, train_chunks=1,
                                           transform=tsfm, normalize=False, learn_on='LIN')
 
 train_data_loader = torch.utils.data.DataLoader(dataset=train_set,
@@ -102,13 +102,13 @@ train_data_loader = torch.utils.data.DataLoader(dataset=train_set,
 val_data_loader = torch.utils.data.DataLoader(dataset=val_set,
                                               batch_size=1,
                                               shuffle=False,
-                                              drop_last=False,
+                                              drop_last=True
                                               pin_memory=True)
 
 test_data_loader = torch.utils.data.DataLoader(dataset=test_set,
                                                batch_size=1,
                                                shuffle=False,
-                                               drop_last=False,
+                                               drop_last=True,
                                                pin_memory=True)
 
 ###########
