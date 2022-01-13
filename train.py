@@ -96,7 +96,7 @@ train_set, val_set, test_set = load_MVSEC('./datasets/MVSEC/data/', scenario='in
 train_data_loader = torch.utils.data.DataLoader(dataset=train_set,
                                                 batch_size=batchsize,
                                                 shuffle=True,
-                                                drop_last=False,
+                                                drop_last=True,
                                                 pin_memory=True)
 
 val_data_loader = torch.utils.data.DataLoader(dataset=val_set,
