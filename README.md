@@ -106,6 +106,10 @@ The following table summarizes their features and performances:
 |  *to be added*                 | ANN            | Binocular   |                            |
 
 
+## Weights and Biases logs
+
+You can check out training curves on this [wandb report](https://wandb.ai/urancon/stereospike_temporal_study/reports/StereoSpike-yet-another-study--VmlldzoyMzUyODQ0?accessToken=w3neipg7h5i2lln6g5aliwsv08el4nf3zxxwpe4gmxx7rq5f032prsnz15zygvkl).
+
 
 ## Citation
 
